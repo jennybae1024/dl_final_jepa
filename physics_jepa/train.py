@@ -139,7 +139,13 @@ class Trainer:
             if self.rank == 0:
                 start_time = datetime.datetime.now()
 
-            for i, batch in enumerate(self.train_loader):
+            if self.rank == 0:
+                batch_pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}", leave=False,
+                                  total=None if self.is_iterable_dataset else len(self.train_loader))
+            else:
+                batch_pbar = self.train_loader
+
+            for i, batch in enumerate(batch_pbar):
                 i += self.train_cfg.get("start_step", 0) # add start step to the global step count
 
                 pred, loss_dict = self.step(batch, model_components, loss_fn, self.rank, log=(i == 0 and epoch % 10 == 0))
@@ -151,6 +157,8 @@ class Trainer:
                 del (batch, pred)
 
                 loss = loss_dict['loss'] / grad_accum_steps
+                if self.rank == 0:
+                    batch_pbar.set_postfix(loss=f"{loss_dict['loss'].item():.4f}")
                 loss.backward()
 
                 if i % grad_accum_steps == 0:
