@@ -4,3 +4,4 @@ num_frames_per_patch: 2
 num_chans: 11
 resolution: 224
 offset: 1
+target_offsets: [1]

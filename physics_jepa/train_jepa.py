@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+import torch
 from omegaconf import OmegaConf
 
 from .train import Trainer
@@ -12,16 +13,52 @@ class JepaTrainer(Trainer):
     def pred_fn(self, batch, model_components, loss_fn):
         encoder, predictor = model_components
         ctx_embed = encoder(batch['context'])
-        tgt_embed = encoder(batch['target'])
-        pred = predictor(ctx_embed)
-        
-        # Compute loss on projected embeddings
-        if len(pred.shape) < 5:
-            loss_dict = loss_fn(pred.unsqueeze(2), tgt_embed.unsqueeze(2))
-        else:
-            loss_dict = loss_fn(pred, tgt_embed)
+        target = batch['target']
 
-        return pred, loss_dict
+        if target.ndim != 6:
+            tgt_embed = encoder(target)
+            pred = predictor(ctx_embed)
+
+            if len(pred.shape) < 5:
+                loss_dict = loss_fn(pred.unsqueeze(2), tgt_embed.unsqueeze(2))
+            else:
+                loss_dict = loss_fn(pred, tgt_embed)
+            return pred, loss_dict
+
+        # Multi-offset targets with shape (B, K, C, T, H, W)
+        offsets = self.cfg.dataset.get("target_offsets", None)
+        if offsets is None:
+            offsets = list(range(1, target.shape[1] + 1))
+        offsets = sorted(set(int(offset) for offset in offsets))
+
+        bsz, num_offsets, channels, timesteps, height, width = target.shape
+        tgt_embed = encoder(target.reshape(bsz * num_offsets, channels, timesteps, height, width))
+        tgt_embed = tgt_embed.reshape(bsz, num_offsets, *tgt_embed.shape[1:])
+
+        pred_by_offset = {}
+        rollout = ctx_embed
+        for step in range(1, max(offsets) + 1):
+            rollout = predictor(rollout)
+            if step in offsets:
+                pred_by_offset[step] = rollout
+
+        preds = torch.stack([pred_by_offset[offset] for offset in offsets], dim=1)
+
+        loss_sums = {}
+        for idx, _ in enumerate(offsets):
+            pred_i = preds[:, idx]
+            tgt_i = tgt_embed[:, idx]
+
+            if len(pred_i.shape) < 5:
+                offset_loss = loss_fn(pred_i.unsqueeze(2), tgt_i.unsqueeze(2))
+            else:
+                offset_loss = loss_fn(pred_i, tgt_i)
+
+            for key, value in offset_loss.items():
+                loss_sums[key] = loss_sums.get(key, 0.0) + value
+
+        loss_dict = {key: value / len(offsets) for key, value in loss_sums.items()}
+        return preds, loss_dict
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

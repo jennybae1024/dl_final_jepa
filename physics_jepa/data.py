@@ -35,6 +35,7 @@ class WellDatasetForJEPA(Dataset):
         split: str,
         resolution: Optional[Tuple[int, int]] = None,   # (H_out, W_out)
         stride: int = None, # temporal overlap of training examples, default is num_frames
+        target_offsets: Optional[List[int]] = None,
         subset_config_path: Optional[str | Path] = None, # path to config file containing subset_indices
         noise_std: float = 0.0, # standard deviation of Gaussian noise to add
         # HDF5 handle/cache tuning:
@@ -52,6 +53,10 @@ class WellDatasetForJEPA(Dataset):
         self.num_frames = int(num_frames)
         assert self.num_frames > 0
         self.stride = stride
+        self.target_offsets = sorted(set(target_offsets if target_offsets is not None else [1]))
+        if len(self.target_offsets) == 0 or any(offset < 1 for offset in self.target_offsets):
+            raise ValueError(f"target_offsets must contain positive integers, got {self.target_offsets}")
+        self.max_target_offset = max(self.target_offsets)
         self.resolution = resolution
         self.noise_std = float(noise_std)
         if self.noise_std > 0:
@@ -90,8 +95,8 @@ class WellDatasetForJEPA(Dataset):
 
     def _build_index(self) -> Tuple[List[tuple[int, int, int]], Dict[str, List[np.ndarray]]]:
         """
-        Valid start t0 satisfy: t0 + 2*num_frames <= T.
-        We step by 1 to allow maximal coverage; ctx=[t0, t0+F), tgt=[t0+F, t0+2F).
+        Valid start t0 satisfy: t0 + (max_target_offset + 1)*num_frames <= T.
+        We step by configured stride; ctx=[t0, t0+F), tgt_k=[t0+kF, t0+(k+1)F).
         """
         
         idx: List[tuple[int, int, int]] = []
@@ -104,7 +109,7 @@ class WellDatasetForJEPA(Dataset):
             with h5py.File(path, 'r') as f:
                 example_scalar_field = f['t0_fields'][list(f['t0_fields'].keys())[0]]
                 T = int(example_scalar_field.shape[1]) # expected shape: num_objs t h w
-                max_t0 = T - 2 * F
+                max_t0 = T - (self.max_target_offset + 1) * F
                 if max_t0 < 0:
                     continue
                 stride = self.stride if self.stride is not None else F
@@ -186,7 +191,7 @@ class WellDatasetForJEPA(Dataset):
 
         # Preallocate final outputs once per sample
         ctx = np.empty((F, H, W, C), dtype=self._dtype, order="C")
-        tgt = np.empty((F, H, W, C), dtype=self._dtype, order="C")
+        tgt = np.empty((len(self.target_offsets), F, H, W, C), dtype=self._dtype, order="C")
 
        # selections: time-contiguous 2F slice
         if self.dataset_name == "shear_flow":
@@ -199,42 +204,48 @@ class WellDatasetForJEPA(Dataset):
             h_slice = slice(None)
             w_slice = slice(None)
 
-        sel_2f_prefix = (local_obj_idx, slice(t0, t0 + 2*F), h_slice, w_slice)
+        total_steps = (self.max_target_offset + 1) * F
+        sel_prefix = (local_obj_idx, slice(t0, t0 + total_steps), h_slice, w_slice)
 
         # per-worker cache of temporary buffers keyed by component shape
-        tmp_cache = state.setdefault("twobuf_cache", {})  # e.g., {(): arr(2F,H,W), (2,): arr(2F,H,W,2), (2,2): arr(2F,H,W,2,2)}
+        tmp_cache = state.setdefault("multioffset_cache", {})
 
         c0 = 0
         for path, dsize, comp_shape in zip(self._field_paths, self._d_sizes, self._comp_shapes):
             c1 = c0 + dsize
             ds = self._get_ds_handle(f, state, path)
 
-             # ensure a reusable temp buffer of shape (2F, H, W, *comp_shape)
-            need_shape = (2*F, H, W) + comp_shape
+             # ensure a reusable temp buffer of shape (total_steps, H, W, *comp_shape)
+            need_shape = (total_steps, H, W) + comp_shape
             buf = tmp_cache.get(comp_shape)
             if buf is None or buf.shape != need_shape or buf.dtype != self._dtype:
                 buf = np.empty(need_shape, dtype=self._dtype, order="C")
                 tmp_cache[comp_shape] = buf
 
             # build full source sel including component dims
-            sel = sel_2f_prefix + (slice(None),) * len(comp_shape)
+            sel = sel_prefix + (slice(None),) * len(comp_shape)
             ds.read_direct(buf, source_sel=sel)  # one I/O per field
 
             # flatten component axes to channels view and split into ctx/tgt
-            view = buf.reshape(2*F, H, W, dsize)   # no copy; C-order
+            view = buf.reshape(total_steps, H, W, dsize)   # no copy; C-order
             c1 = c0 + dsize
             ctx[..., c0:c1] = view[:F]
-            tgt[..., c0:c1] = view[F:]
+            for target_idx, target_offset in enumerate(self.target_offsets):
+                start = target_offset * F
+                end = (target_offset + 1) * F
+                tgt[target_idx, ..., c0:c1] = view[start:end]
             c0 = c1
 
         # -> torch (C, T, H, W)
         ctx_t = torch.from_numpy(ctx).permute(3, 0, 1, 2).contiguous()
-        tgt_t = torch.from_numpy(tgt).permute(3, 0, 1, 2).contiguous()
+        tgt_t = torch.from_numpy(tgt).permute(0, 4, 1, 2, 3).contiguous()
 
         # Optional resize
         if self.resolution is not None and tuple(ctx_t.shape[-2:]) != tuple(self.resolution):
             ctx_t = torch.nn.functional.interpolate(ctx_t, size=self.resolution, mode='bilinear', align_corners=False)
-            tgt_t = torch.nn.functional.interpolate(tgt_t, size=self.resolution, mode='bilinear', align_corners=False)
+            tgt_flat = tgt_t.view(-1, *tgt_t.shape[-3:])
+            tgt_flat = torch.nn.functional.interpolate(tgt_flat, size=self.resolution, mode='bilinear', align_corners=False)
+            tgt_t = tgt_flat.view(len(self.target_offsets), tgt_t.shape[1], tgt_t.shape[2], *self.resolution)
 
         # Add Gaussian noise if specified
         if self.noise_std > 0:
@@ -242,6 +253,9 @@ class WellDatasetForJEPA(Dataset):
             noise_tgt = torch.randn_like(tgt_t) * self.noise_std
             ctx_t = ctx_t + noise_ctx
             tgt_t = tgt_t + noise_tgt
+
+        if len(self.target_offsets) == 1:
+            tgt_t = tgt_t[0]
 
         return {"context": ctx_t, "target": tgt_t, "physical_params": torch.tensor(self.physical_params_idx[file_id])}
 
@@ -623,6 +637,7 @@ def get_dataset(
     resolution=None,
     balance_classes=False,
     offset=None,
+    target_offsets=None,
     subset_config_path=None,
     noise_std=0.0,
 ):
@@ -638,6 +653,7 @@ def get_dataset(
         split=split,
         resolution=resolution,
         stride=offset,
+        target_offsets=target_offsets,
         subset_config_path=subset_config_path,
         noise_std=noise_std,
     )
@@ -675,6 +691,7 @@ def get_train_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None
         balance_classes=cfg[stage].get("balance_classes", False),
         resolution=cfg.dataset.get("resolution", None),
         offset=cfg.dataset.get("offset", None),
+        target_offsets=cfg.dataset.get("target_offsets", None),
         subset_config_path=cfg.dataset.get("subset_config_path", None),
         noise_std=cfg[stage].get("noise_std", 0.0),
     )
@@ -695,6 +712,7 @@ def get_val_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None):
         balance_classes=False,
         resolution=cfg.dataset.get("resolution", None),
         offset=cfg.dataset.get("offset", None),
+        target_offsets=cfg.dataset.get("target_offsets", None),
         noise_std=cfg[stage].get("noise_std", 0.0),
     )
 
@@ -719,6 +737,7 @@ def get_train_dataloader(
         balance_classes=False,
         resolution=None,
         offset=None,
+        target_offsets=None,
         subset_config_path=None,
         noise_std=0.0,
     ):
@@ -734,6 +753,7 @@ def get_train_dataloader(
                           balance_classes=balance_classes,
                           resolution=resolution,
                           offset=offset,
+                          target_offsets=target_offsets,
                           subset_config_path=subset_config_path,
                           noise_std=noise_std,
                         )
@@ -793,6 +813,7 @@ def get_val_dataloader(
         balance_classes=False,
         resolution=None,
         offset=None,
+        target_offsets=None,
         noise_std=0.0,
     ):
     dataset = get_dataset(dataset_name, 
@@ -807,6 +828,7 @@ def get_val_dataloader(
                           balance_classes=balance_classes,
                           resolution=resolution,
                           offset=offset,
+                          target_offsets=target_offsets,
                           noise_std=noise_std,
                         )
     if world_size == 1:
