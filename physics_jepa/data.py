@@ -694,6 +694,10 @@ def get_train_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None
         target_offsets=cfg.dataset.get("target_offsets", None),
         subset_config_path=cfg.dataset.get("subset_config_path", None),
         noise_std=cfg[stage].get("noise_std", 0.0),
+        num_workers=cfg[stage].get("num_workers", 4),
+        persistent_workers=cfg[stage].get("persistent_workers", True),
+        pin_memory=cfg[stage].get("pin_memory", True),
+        prefetch_factor=cfg[stage].get("prefetch_factor", 2),
     )
 
 def get_val_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None):
@@ -714,6 +718,10 @@ def get_val_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None):
         offset=cfg.dataset.get("offset", None),
         target_offsets=cfg.dataset.get("target_offsets", None),
         noise_std=cfg[stage].get("noise_std", 0.0),
+        num_workers=cfg[stage].get("num_workers", 4),
+        persistent_workers=cfg[stage].get("persistent_workers", True),
+        pin_memory=cfg[stage].get("pin_memory", True),
+        prefetch_factor=cfg[stage].get("prefetch_factor", 2),
     )
 
 def get_train_dataloader(
@@ -779,6 +787,11 @@ def get_train_dataloader(
         np.random.seed(worker_seed)
         torch.manual_seed(worker_seed)
 
+    effective_persistent_workers = persistent_workers if num_workers > 0 else False
+    loader_kwargs = {}
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+
     loader = DataLoader(
         dataset=dataset,
         sampler=sampler,
@@ -787,9 +800,9 @@ def get_train_dataloader(
         shuffle=shuffle if sampler is None else False,
         num_workers=num_workers,
         worker_init_fn=worker_init_fn,
-        persistent_workers=persistent_workers,
+        persistent_workers=effective_persistent_workers,
         pin_memory=pin_memory,
-        prefetch_factor=prefetch_factor,
+        **loader_kwargs,
     )
     return loader
 
@@ -803,6 +816,7 @@ def get_val_dataloader(
         world_size=1, 
         seed=42, 
         shuffle=False,
+        num_workers=4,
         persistent_workers=True, 
         pin_memory=True, 
         prefetch_factor=2,
@@ -851,15 +865,20 @@ def get_val_dataloader(
         np.random.seed(worker_seed)
         torch.manual_seed(worker_seed)
 
+    effective_persistent_workers = persistent_workers if num_workers > 0 else False
+    loader_kwargs = {}
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+
     val_loader = DataLoader(
         dataset=dataset,
         sampler=sampler,
         batch_size=batch_size,
         shuffle=shuffle if sampler is None else False,
-        num_workers=4,
+        num_workers=num_workers,
         worker_init_fn=worker_init_fn,
-        persistent_workers=persistent_workers,
+        persistent_workers=effective_persistent_workers,
         pin_memory=pin_memory,
-        prefetch_factor=prefetch_factor,
+        **loader_kwargs,
     )
     return val_loader

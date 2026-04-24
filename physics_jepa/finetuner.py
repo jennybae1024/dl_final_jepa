@@ -121,19 +121,28 @@ class BaseFinetuner(Trainer, ABC):
             train_dataset, train_labels, val_dataset, val_labels = self.get_embeddings()
             train_dataset = EmbeddingsDataset(train_dataset, train_labels)
             val_dataset = EmbeddingsDataset(val_dataset, val_labels)
+            num_workers = self.cfg.ft.get("num_workers", 4)
+            persistent_workers = self.cfg.ft.get("persistent_workers", True) if num_workers > 0 else False
+            dataloader_kwargs = {}
+            if num_workers > 0:
+                dataloader_kwargs["prefetch_factor"] = self.cfg.ft.get("prefetch_factor", 2)
             self.train_loader = torch.utils.data.DataLoader(
                 train_dataset,
                 batch_size=self.cfg.ft.batch_size,
                 shuffle=True,
-                num_workers=4,
-                prefetch_factor=2
+                num_workers=num_workers,
+                pin_memory=self.cfg.ft.get("pin_memory", True),
+                persistent_workers=persistent_workers,
+                **dataloader_kwargs,
             )
             self.val_loader = torch.utils.data.DataLoader(
                 val_dataset,
                 batch_size=self.cfg.ft.batch_size,
                 shuffle=False,
-                num_workers=4,
-                prefetch_factor=2
+                num_workers=num_workers,
+                pin_memory=self.cfg.ft.get("pin_memory", True),
+                persistent_workers=persistent_workers,
+                **dataloader_kwargs,
             )
             model_components = []
             
@@ -207,6 +216,25 @@ class BaseFinetuner(Trainer, ABC):
         path = Path(checkpoint_or_dir)
         config_dir = path.parent if path.is_file() else path
         return config_dir / "config.json"
+
+    def _is_valid_embeddings_file(self, file_path):
+        path = Path(file_path)
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+        try:
+            with h5py.File(path, "r", locking=False) as file_handle:
+                if "embeddings" not in file_handle or "labels" not in file_handle:
+                    return False
+                if file_handle["embeddings"].shape[0] == 0 or file_handle["labels"].shape[0] == 0:
+                    return False
+        except OSError:
+            return False
+        return True
+
+    def _remove_if_exists(self, file_path):
+        path = Path(file_path)
+        if path.exists():
+            path.unlink()
 
     def _regression_metrics(self, pred, target, target_names, prefix):
         mse_per_target = np.mean((pred - target) ** 2, axis=0)
@@ -293,6 +321,11 @@ class BaseFinetuner(Trainer, ABC):
         return pred, loss_dict
 
     def get_encoder_and_raw_loaders(self):
+        num_workers = self.cfg.ft.get("num_workers", 4)
+        persistent_workers = self.cfg.ft.get("persistent_workers", True)
+        pin_memory = self.cfg.ft.get("pin_memory", True)
+        prefetch_factor = self.cfg.ft.get("prefetch_factor", 2)
+
         # make new loaders that have larger batch size for calculating embeddings
         self.train_loader = get_train_dataloader(
             self.cfg.dataset.name,
@@ -310,6 +343,10 @@ class BaseFinetuner(Trainer, ABC):
             resolution=self.cfg.dataset.get("resolution", None),
             offset=self.cfg.dataset.get("offset", None),
             noise_std=self.cfg.ft.get("noise_std", 0.0),
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
         )
         self.val_loader = get_val_dataloader(
             self.cfg.dataset.name,
@@ -327,6 +364,10 @@ class BaseFinetuner(Trainer, ABC):
             resolution=self.cfg.dataset.get("resolution", None),
             offset=self.cfg.dataset.get("offset", None),
             noise_std=self.cfg.ft.get("noise_std", 0.0),
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+            pin_memory=pin_memory,
+            prefetch_factor=prefetch_factor,
         )
         
         encoder = self.load_model()
@@ -349,6 +390,13 @@ class BaseFinetuner(Trainer, ABC):
         else:
             train_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.parent.name}_{runpath.name}_{'noise-' + str(self.cfg.ft.get('noise_std', 0.0)) + '_' if self.cfg.ft.get('noise_std', 0.0) > 0.0 else ''}embeddings_train.h5"
             val_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.parent.name}_{runpath.name}_{'noise-' + str(self.cfg.ft.get('noise_std', 0.0)) + '_' if self.cfg.ft.get('noise_std', 0.0) > 0.0 else ''}embeddings_val.h5"
+
+        if train_embeddings_path.exists() and not self._is_valid_embeddings_file(train_embeddings_path):
+            print(f"Found corrupted train embeddings file at {train_embeddings_path}; rebuilding", flush=True)
+            self._remove_if_exists(train_embeddings_path)
+        if val_embeddings_path.exists() and not self._is_valid_embeddings_file(val_embeddings_path):
+            print(f"Found corrupted val embeddings file at {val_embeddings_path}; rebuilding", flush=True)
+            self._remove_if_exists(val_embeddings_path)
         
         self.cfg.ft.embeddings_path = str(train_embeddings_path)
         if not train_embeddings_path.exists():
@@ -512,7 +560,7 @@ class BaseFinetuner(Trainer, ABC):
             torch.cuda.empty_cache()
             gc.collect()
         
-        if train_embeddings_path.exists():
+        if train_embeddings_path.exists() and val_embeddings_path.exists():
             print(f"loading embeddings from {train_embeddings_path}", flush=True)
             
             # Add retry mechanism for file opening to handle temporary locking issues
@@ -544,7 +592,20 @@ class BaseFinetuner(Trainer, ABC):
                         time.sleep(retry_delay)
                         retry_delay *= 2  # Exponential backoff
                     else:
+                        if "truncated file" in str(e).lower() and not getattr(self, "_embedding_rebuild_attempted", False):
+                            print("Detected truncated embeddings file. Deleting cached embeddings and rebuilding once.", flush=True)
+                            self._embedding_rebuild_attempted = True
+                            self._remove_if_exists(train_embeddings_path)
+                            self._remove_if_exists(val_embeddings_path)
+                            return self.get_embeddings()
                         raise e
+
+        else:
+            raise FileNotFoundError(
+                f"Expected embeddings files not found: {train_embeddings_path} and {val_embeddings_path}"
+            )
+
+        self._embedding_rebuild_attempted = False
         
         return embeddings, all_labels, val_embeddings, val_labels
     
