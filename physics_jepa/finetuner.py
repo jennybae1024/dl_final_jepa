@@ -177,6 +177,37 @@ class BaseFinetuner(Trainer, ABC):
             embeddings = np.asarray(embeddings)
         return embeddings.reshape(embeddings.shape[0], -1)
 
+    def _resolve_checkpoint_file(self, checkpoint_path, prefer_encoder=False):
+        path = Path(checkpoint_path)
+        if path.is_file():
+            return path
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
+        if not path.is_dir():
+            raise ValueError(f"Checkpoint path must be a file or directory: {checkpoint_path}")
+
+        candidates = sorted(path.glob("*.pth"))
+        if len(candidates) == 0:
+            raise FileNotFoundError(f"No .pth checkpoints found in directory: {checkpoint_path}")
+
+        def score(candidate):
+            stem = candidate.stem.lower()
+            nums = re.findall(r"\d+", stem)
+            last_num = int(nums[-1]) if nums else -1
+            encoder_bonus = 1000000 if "encoder" in stem else 0
+            if "predictor" in stem or "decoder" in stem or "head" in stem:
+                encoder_bonus -= 1000000
+            return (encoder_bonus if prefer_encoder else 0, last_num, candidate.stat().st_mtime)
+
+        resolved = max(candidates, key=score)
+        print(f"Resolved checkpoint directory {checkpoint_path} -> {resolved}", flush=True)
+        return resolved
+
+    def _resolve_model_config_path(self, checkpoint_or_dir):
+        path = Path(checkpoint_or_dir)
+        config_dir = path.parent if path.is_file() else path
+        return config_dir / "config.json"
+
     def _regression_metrics(self, pred, target, target_names, prefix):
         mse_per_target = np.mean((pred - target) ** 2, axis=0)
         metrics = {f"{prefix}/mse": float(np.mean(mse_per_target))}
@@ -540,8 +571,9 @@ class JepaFinetuner(BaseFinetuner):
             in_chans=self.cfg.dataset.num_chans if 'fields' not in self.cfg.ft else len(self.cfg.ft.fields),
         )
         if self.trained_model_path is not None:
-            print(f"loading state dict from {self.trained_model_path}", flush=True)
-            state_dict = torch.load(self.trained_model_path)
+            resolved_checkpoint = self._resolve_checkpoint_file(self.trained_model_path, prefer_encoder=True)
+            print(f"loading state dict from {resolved_checkpoint}", flush=True)
+            state_dict = torch.load(resolved_checkpoint)
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             encoder.load_state_dict(state_dict)
         else:
@@ -614,7 +646,8 @@ class JepaFinetuner(BaseFinetuner):
 class VideoMAEFinetuner(BaseFinetuner):
     def load_model(self):
         if self.trained_model_path is not None:
-            model_config = json.load(open(Path(self.trained_model_path).parent / "config.json"))
+            model_config_path = self._resolve_model_config_path(self.trained_model_path)
+            model_config = json.load(open(model_config_path))
             model_arch = model_config["model"] 
         else:
             model_arch = 'pretrain_videomae_small_patch16_224'
@@ -640,9 +673,10 @@ class VideoMAEFinetuner(BaseFinetuner):
         )
 
         if self.trained_model_path is not None:
-            print(f"Loading pretrained weights from: {self.trained_model_path}")
+            resolved_checkpoint = self._resolve_checkpoint_file(self.trained_model_path)
+            print(f"Loading pretrained weights from: {resolved_checkpoint}")
     
-            checkpoint = torch.load(self.trained_model_path, map_location='cpu')
+            checkpoint = torch.load(resolved_checkpoint, map_location='cpu')
             pretrained_state_dict = checkpoint['model']
             
             # Filter encoder weights (exclude decoder and MAE-specific components)
@@ -671,7 +705,8 @@ class VideoMAEFinetuner(BaseFinetuner):
 
     def create_head(self, metadata):
         if self.trained_model_path is not None:
-            model_config = json.load(open(Path(self.trained_model_path).parent / "config.json"))
+            model_config_path = self._resolve_model_config_path(self.trained_model_path)
+            model_config = json.load(open(model_config_path))
             model_arch = model_config["model"] 
         else:
             model_arch = 'pretrain_videomae_small_patch16_224'
