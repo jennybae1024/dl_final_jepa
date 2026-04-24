@@ -21,6 +21,7 @@ import time
 from typing import List, Sequence
 import re
 from sklearn.metrics import f1_score
+from sklearn.neighbors import KNeighborsRegressor
 
 from .data import EmbeddingsDataset, get_dataset_metadata, get_train_dataloader, get_val_dataloader
 from .model import get_model_and_loss_cnn, get_autoencoder
@@ -102,6 +103,16 @@ class BaseFinetuner(Trainer, ABC):
             wandb.init(project="physics-jepa",
                 name=run_name,
                 config=OmegaConf.to_container(self.cfg))
+
+        metadata = get_dataset_metadata(self.cfg.dataset.name)
+        if self.cfg.ft.get("head_type", "linear") == "knn":
+            if self.cfg.ft.get("not_from_embeddings", False):
+                raise ValueError("kNN evaluation requires precomputed embeddings; set ft.not_from_embeddings=false")
+            self.run_knn_evaluation(metadata)
+            self.cleanup_embedding_files()
+            if self.world_size > 1:
+                dist.destroy_process_group()
+            return
         
         if self.cfg.ft.get("not_from_embeddings", False):
             encoder = self.get_encoder_and_raw_loaders()
@@ -126,7 +137,6 @@ class BaseFinetuner(Trainer, ABC):
             )
             model_components = []
             
-        metadata = get_dataset_metadata(self.cfg.dataset.name)
         head = self.create_head(metadata)
 
         model_components.append(head)
@@ -159,6 +169,61 @@ class BaseFinetuner(Trainer, ABC):
 
         if self.world_size > 1:
             dist.destroy_process_group()
+
+    def _flatten_embeddings(self, embeddings):
+        if torch.is_tensor(embeddings):
+            embeddings = embeddings.detach().cpu().numpy()
+        else:
+            embeddings = np.asarray(embeddings)
+        return embeddings.reshape(embeddings.shape[0], -1)
+
+    def _regression_metrics(self, pred, target, target_names, prefix):
+        mse_per_target = np.mean((pred - target) ** 2, axis=0)
+        metrics = {f"{prefix}/mse": float(np.mean(mse_per_target))}
+        for idx, mse_value in enumerate(mse_per_target):
+            label_name = target_names[idx] if idx < len(target_names) else f"target_{idx}"
+            metrics[f"{prefix}/mse_{label_name}"] = float(mse_value)
+        return metrics
+
+    def run_knn_evaluation(self, metadata):
+        train_embeddings, train_labels, val_embeddings, val_labels = self.get_embeddings()
+        train_x = self._flatten_embeddings(train_embeddings)
+        val_x = self._flatten_embeddings(val_embeddings)
+        train_y = np.asarray(train_labels)
+        val_y = np.asarray(val_labels)
+
+        num_neighbors = min(self.cfg.ft.get("knn_k", 20), len(train_x))
+        if num_neighbors < 1:
+            raise ValueError("kNN requires at least one training sample")
+
+        knn = KNeighborsRegressor(
+            n_neighbors=num_neighbors,
+            weights=self.cfg.ft.get("knn_weights", "distance"),
+            metric=self.cfg.ft.get("knn_metric", "minkowski"),
+            p=self.cfg.ft.get("knn_p", 2),
+        )
+        knn.fit(train_x, train_y)
+
+        train_pred = knn.predict(train_x)
+        val_pred = knn.predict(val_x)
+
+        target_names = list(getattr(metadata, "constant_scalar_names", []))
+        metrics = {}
+        metrics.update(self._regression_metrics(train_pred, train_y, target_names, "train"))
+        metrics.update(self._regression_metrics(val_pred, val_y, target_names, "val"))
+
+        if self.rank == 0:
+            print(
+                f"kNN regression complete | k={num_neighbors} | "
+                f"train MSE={metrics['train/mse']:.6f} | val MSE={metrics['val/mse']:.6f}",
+                flush=True,
+            )
+            for metric_name in sorted(metrics.keys()):
+                if metric_name.endswith("/mse"):
+                    continue
+                print(f"{metric_name}: {metrics[metric_name]:.6f}", flush=True)
+            if not self.cfg.dry_run:
+                wandb.log(metrics)
 
     def pred_fn(self, batch, model_components, loss_fn):
         if self.cfg.ft.get("not_from_embeddings", False):

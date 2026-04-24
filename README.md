@@ -57,6 +57,29 @@ Fine-tune a pretrained JEPA encoder for physical parameter estimation. Set `CHEC
 
 The same configs used for pretraining are reused here; the `ft:` block controls finetuning hyperparameters. A multi-GPU variant is available at `scripts/shear_flow/run_finetune_jepa_ddp.sh`.
 
+### 3b. Representation evaluation (linear probe + kNN)
+
+To evaluate frozen JEPA representations for continuous parameter prediction (z-scored labels, MSE), run:
+
+- **Single linear layer probe** (freeze encoder, train linear head):
+
+```bash
+scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
+  ft.head_type=linear \
+  ft.use_attentive_pooling=false \
+  ft.task=regression
+```
+
+- **kNN regression** (freeze encoder, no head training):
+
+```bash
+scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
+  ft=knn \
+  ft.task=regression
+```
+
+The code reports overall MSE and per-target MSE (e.g., `alpha`, `zeta`) on both train and validation splits.
+
 ## Baselines
 
 ### 4. DISCO finetuning

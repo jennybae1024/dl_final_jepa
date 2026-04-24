@@ -1,0 +1,11 @@
+num_epochs: 1
+lr: 1e-5
+batch_size: 128
+report_every: 100
+save_every: 10
+head_type: knn
+embeddings_dir: "./embeddings"
+knn_k: 20
+knn_weights: distance
+knn_metric: minkowski
+knn_p: 2
