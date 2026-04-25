@@ -87,6 +87,7 @@ class ResidualBlock(nn.Module):
         x = input + self.drop_path(x)
         return x
 
+#Modified to use channel-wise encoding
 class ConvEncoder(nn.Module):
     def __init__(self,
                  in_chans=2,
@@ -153,6 +154,20 @@ class ConvEncoder(nn.Module):
     def forward(self, x, **kwargs):
         for i in range(len(self.dims)):
             x = self.downsample_layers[i](x)
+
+            if i == 0:
+                B, CD, T, H, W = x.shape
+                C, D = self.C, self.D
+
+                # reshape to separate channels
+                x = x.view(B, C, D, T, H, W)
+
+                # add channel tokens
+                x = x + self.channel_tokens[..., None, None, None]
+
+                # fuse back
+                x = x.view(B, C * D, T, H, W)
+            
             x = x.squeeze(2)
             x = self.res_blocks[i](x)
         return x
@@ -163,13 +178,18 @@ class ConvEncoderViTTiny(nn.Module):
                  num_res_blocks=[3, 3, 9, 3],
                  dims=[48, 96, 192, 384]):
         super().__init__()
+        self.C = in_chans
+        self.D = dims[0] // in_chans
+        
+
+        assert dims[0] % in_chans == 0, "dims[0] must be divisible by in_chans"
         
         # Stem: 11 -> 48 channels, no spatial downsampling
         stem = nn.Sequential(
-            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
+            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same', groups=in_chans),
             LayerNorm(dims[0], data_format="channels_first"),
         )
-        
+        self.channel_tokens = nn.Parameter(torch.randn(1, self.C, self.D))
         self.downsample_layers = nn.ModuleList()
         self.downsample_layers.append(stem)
         
