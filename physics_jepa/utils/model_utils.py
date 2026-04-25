@@ -170,7 +170,8 @@ class ConvEncoder(nn.Module):
                 x = x.view(B, C, D, T, H, W)
 
                 # add channel tokens
-                x = x + self.channel_tokens[..., None, None, None]
+                tokens = self.channel_tokens.view(1, C, D, 1, 1, 1)
+                x = x + tokens
 
                 # fuse back
                 x = x.view(B, C * D, T, H, W)
