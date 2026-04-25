@@ -23,6 +23,7 @@ train:
   cov_coeff: 2
   target_encoder_mode: "shared"
   target_ema_momentum: 0.996
+  target_offset_weights: null
   predict_n_steps: false
   lr_scheduler: "cosine"
   lr_scheduler_warmup_epochs: 2
