@@ -17,7 +17,7 @@ import gc
 import copy
 
 from .data import get_train_dataloader_from_cfg, get_val_dataloader_from_cfg, get_dataset_metadata
-from .model import get_model_and_loss_cnn, get_autoencoder
+from .model import get_model_and_loss_cnn, get_autoencoder, mse_loss_dict
 from .utils.model_utils import CosineLRScheduler
 from .utils.data_utils import mae
 from .utils.hydra import compose
@@ -360,6 +360,13 @@ class Trainer:
 
                 distprint(f"target encoder EMA momentum: {self.train_cfg.get('target_ema_momentum', 0.996)}", local_rank=self.rank)
                 model_components.append(target_encoder)
+
+            loss_name = self.cfg.model.get("loss", "vicreg")
+            if loss_name in ["mse", "l2"]:
+                loss_fn = mse_loss_dict
+            elif loss_name not in ["vicreg", "gaussian_matching"]:
+                raise ValueError(f"Unsupported JEPA loss '{loss_name}'. Use 'vicreg', 'mse', 'l2', or 'gaussian_matching'.")
+            distprint(f"JEPA loss: {loss_name}", local_rank=self.rank)
 
         elif self.cfg.model.objective == 'ae':
             encoder, decoder = get_autoencoder(

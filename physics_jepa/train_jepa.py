@@ -36,6 +36,19 @@ class JepaTrainer(Trainer):
         if offsets is None:
             offsets = list(range(1, target.shape[1] + 1))
         offsets = sorted(set(int(offset) for offset in offsets))
+        weights = self.train_cfg.get("target_offset_weights", None)
+        if weights is None:
+            weights = [1.0] * len(offsets)
+        else:
+            weights = [float(weight) for weight in weights]
+            if len(weights) != len(offsets):
+                raise ValueError(
+                    f"target_offset_weights must have same length as target_offsets: "
+                    f"got {len(weights)} weights for {len(offsets)} offsets"
+                )
+        weight_sum = sum(weights)
+        if weight_sum <= 0:
+            raise ValueError(f"target_offset_weights must sum to a positive value, got {weights}")
 
         bsz, num_offsets, channels, timesteps, height, width = target.shape
         if use_ema_target:
@@ -66,9 +79,9 @@ class JepaTrainer(Trainer):
                 offset_loss = loss_fn(pred_i, tgt_i)
 
             for key, value in offset_loss.items():
-                loss_sums[key] = loss_sums.get(key, 0.0) + value
+                loss_sums[key] = loss_sums.get(key, 0.0) + weights[idx] * value
 
-        loss_dict = {key: value / len(offsets) for key, value in loss_sums.items()}
+        loss_dict = {key: value / weight_sum for key, value in loss_sums.items()}
         return preds, loss_dict
 
 if __name__ == "__main__":

@@ -24,6 +24,9 @@ def get_model_and_loss_cnn(dims, num_res_blocks, num_frames, in_chans=2, sim_coe
     
     return encoder, predictor, loss
 
+def mse_loss_dict(x, y):
+    return {"loss": F.mse_loss(x, y)}
+
 def vicreg_loss_3d(
     x, y, sim_coeff, std_coeff, cov_coeff, n_chunks=10,
     num_groups=1,
