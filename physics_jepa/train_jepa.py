@@ -11,12 +11,18 @@ class JepaTrainer(Trainer):
         super().__init__(cfg)
 
     def pred_fn(self, batch, model_components, loss_fn):
-        encoder, predictor = model_components
+        encoder, predictor = model_components[:2]
+        use_ema_target = len(model_components) > 2
+        target_encoder = model_components[2] if use_ema_target else encoder
         ctx_embed = encoder(batch['context'])
         target = batch['target']
 
         if target.ndim != 6:
-            tgt_embed = encoder(target)
+            if use_ema_target:
+                with torch.no_grad():
+                    tgt_embed = target_encoder(target)
+            else:
+                tgt_embed = target_encoder(target)
             pred = predictor(ctx_embed)
 
             if len(pred.shape) < 5:
@@ -32,8 +38,13 @@ class JepaTrainer(Trainer):
         offsets = sorted(set(int(offset) for offset in offsets))
 
         bsz, num_offsets, channels, timesteps, height, width = target.shape
-        tgt_embed = encoder(target.reshape(bsz * num_offsets, channels, timesteps, height, width))
-        tgt_embed = tgt_embed.reshape(bsz, num_offsets, *tgt_embed.shape[1:])
+        if use_ema_target:
+            with torch.no_grad():
+                tgt_embed = target_encoder(target.reshape(bsz * num_offsets, channels, timesteps, height, width))
+                tgt_embed = tgt_embed.reshape(bsz, num_offsets, *tgt_embed.shape[1:])
+        else:
+            tgt_embed = target_encoder(target.reshape(bsz * num_offsets, channels, timesteps, height, width))
+            tgt_embed = tgt_embed.reshape(bsz, num_offsets, *tgt_embed.shape[1:])
 
         pred_by_offset = {}
         rollout = ctx_embed

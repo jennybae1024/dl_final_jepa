@@ -14,6 +14,7 @@ from omegaconf import OmegaConf
 from collections import defaultdict
 import datetime
 import gc
+import copy
 
 from .data import get_train_dataloader_from_cfg, get_val_dataloader_from_cfg, get_dataset_metadata
 from .model import get_model_and_loss_cnn, get_autoencoder
@@ -61,8 +62,14 @@ class Trainer:
         # Get weight decay from config, default to 0.05 if not specified
         weight_decay = self.train_cfg.get("weight_decay", 0.05)
         
+        trainable_params = [
+            p
+            for component in model_components
+            for p in component.parameters()
+            if p.requires_grad
+        ]
         optimizer = torch.optim.AdamW(
-            [p for component in model_components for p in list(component.parameters())], 
+            trainable_params,
             lr=self.train_cfg.lr,
             weight_decay=weight_decay,
             betas=(0.9, 0.95)
@@ -121,6 +128,18 @@ class Trainer:
 
         date_str = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         out_path = Path(self.cfg.out_path) / f"{run_name}_{date_str}"
+        save_best_checkpoint = self.train_cfg.get("save_best_checkpoint", False)
+        best_metric_name = self.train_cfg.get("best_metric_name", "val/loss")
+        best_metric_mode = self.train_cfg.get("best_metric_mode", "min")
+        if best_metric_mode not in ["min", "max"]:
+            raise ValueError(f"best_metric_mode must be 'min' or 'max', got {best_metric_mode}")
+        best_metric_value = float("inf") if best_metric_mode == "min" else float("-inf")
+
+        def ensure_out_path_exists():
+            if not out_path.exists():
+                out_path.mkdir(parents=True)
+                cfg_path = out_path / "config.yaml"
+                OmegaConf.save(self.cfg, cfg_path)
 
         if self.rank == 0:
             epochs = tqdm(range(self.train_cfg.num_epochs))
@@ -133,7 +152,10 @@ class Trainer:
                 model_components[1].train()
             else:
                 for component in model_components:
-                    component.train()
+                    if self.is_ema_target_encoder(component):
+                        component.eval()
+                    else:
+                        component.train()
 
             epoch_losses_dict = defaultdict(list)
             if self.rank == 0:
@@ -163,6 +185,7 @@ class Trainer:
 
                 if i % grad_accum_steps == 0:
                     optimizer.step()
+                    self.update_target_encoder(model_components)
                     optimizer.zero_grad(set_to_none=True)
 
                     # Set learning rate from schedule
@@ -195,12 +218,9 @@ class Trainer:
                 if self.train_cfg.get("save_every_steps", None) is not None and i % self.train_cfg.save_every_steps == 0:
                     distprint(f"save_every_steps: {self.train_cfg.save_every_steps}, i: {i}", local_rank=self.rank)
                     if self.rank == 0:
-                        if not out_path.exists():
-                            out_path.mkdir(parents=True)
-                            cfg_path = out_path / f"config.yaml"
-                            OmegaConf.save(self.cfg, cfg_path)
-                        for component in model_components:
-                            torch.save(component.state_dict(), out_path / f"{component.__class__.__name__}_step{i}.pth")
+                        ensure_out_path_exists()
+                        for name, component in self.named_model_components(model_components):
+                            torch.save(self.unwrap_model(component).state_dict(), out_path / f"{name}_step{i}.pth")
                         print(f"checkpoint at step {i} saved to {out_path}")
 
                 if self.train_cfg.get("steps", None) is not None and i > self.train_cfg.steps:
@@ -213,13 +233,21 @@ class Trainer:
             if val_losses_dict is not None:
                 distprint(f"Epoch {epoch} val loss: {val_losses_dict['val/loss']}", local_rank=self.rank)
 
+            if save_best_checkpoint and val_losses_dict is not None and best_metric_name in val_losses_dict:
+                current_metric_value = float(val_losses_dict[best_metric_name])
+                is_better = current_metric_value < best_metric_value if best_metric_mode == "min" else current_metric_value > best_metric_value
+                if is_better:
+                    best_metric_value = current_metric_value
+                    if self.rank == 0:
+                        ensure_out_path_exists()
+                        for name, component in self.named_model_components(model_components):
+                            torch.save(self.unwrap_model(component).state_dict(), out_path / f"{name}_best.pth")
+                        print(f"new best checkpoint saved at epoch {epoch}: {best_metric_name}={current_metric_value:.6f}", flush=True)
+
             if self.rank == 0 and (epoch+1) % self.train_cfg.save_every == 0 and epoch > 0:
-                if not out_path.exists():
-                    out_path.mkdir(parents=True)
-                    cfg_path = out_path / f"config.yaml"
-                    OmegaConf.save(self.cfg, cfg_path)
-                for i, component in enumerate(model_components):
-                    torch.save(component.state_dict(), out_path / f"{component.__class__.__name__}_{epoch}.pth")
+                ensure_out_path_exists()
+                for name, component in self.named_model_components(model_components):
+                    torch.save(self.unwrap_model(component).state_dict(), out_path / f"{name}_{epoch}.pth")
 
         distprint(f"all checkpoints saved to {out_path}", local_rank=self.rank)
 
@@ -309,11 +337,29 @@ class Trainer:
                 state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
                 predictor.load_state_dict(state_dict)
 
+            target_encoder_mode = self.train_cfg.get("target_encoder_mode", "shared")
+            if target_encoder_mode not in ["shared", "ema"]:
+                raise ValueError(f"target_encoder_mode must be 'shared' or 'ema', got {target_encoder_mode}")
+
             distprint(f"num encoder parameters: {sum(p.numel() for p in encoder.parameters())}", local_rank=self.rank)
             distprint(f"num predictor parameters: {sum(p.numel() for p in predictor.parameters())}", local_rank=self.rank)
+            distprint(f"target encoder mode: {target_encoder_mode}", local_rank=self.rank)
             distprint(summarize_convs(encoder), local_rank=self.rank)
 
             model_components = [encoder, predictor]
+            if target_encoder_mode == "ema":
+                target_encoder = copy.deepcopy(encoder)
+                if 'target_encoder_path' in self.train_cfg and self.train_cfg.target_encoder_path is not None:
+                    distprint(f"loading target encoder from {self.train_cfg.target_encoder_path}", local_rank=self.rank)
+                    state_dict = torch.load(self.train_cfg.target_encoder_path)
+                    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+                    target_encoder.load_state_dict(state_dict)
+                for param in target_encoder.parameters():
+                    param.requires_grad = False
+                target_encoder._is_ema_target_encoder = True
+
+                distprint(f"target encoder EMA momentum: {self.train_cfg.get('target_ema_momentum', 0.996)}", local_rank=self.rank)
+                model_components.append(target_encoder)
 
         elif self.cfg.model.objective == 'ae':
             encoder, decoder = get_autoencoder(
@@ -362,13 +408,44 @@ class Trainer:
             loss_fn = partial(vicreg_loss_bcs, sim_coeff=self.train_cfg.sim_coeff, bcs_coeff=self.train_cfg.bcs_coeff, num_slices=self.train_cfg.num_slices)
 
         if self.world_size > 1:
-            for component in model_components:
-                component = DDP(component.to(self.rank), device_ids=[self.rank])
+            model_components = [
+                component.to(self.rank) if self.is_ema_target_encoder(component)
+                else DDP(component.to(self.rank), device_ids=[self.rank])
+                for component in model_components
+            ]
         else:
-            for component in model_components:
-                component = component.to(self.rank)
+            model_components = [component.to(self.rank) for component in model_components]
 
         return model_components, loss_fn
+
+    @staticmethod
+    def unwrap_model(component):
+        return component.module if isinstance(component, DDP) else component
+
+    def is_ema_target_encoder(self, component):
+        return getattr(self.unwrap_model(component), "_is_ema_target_encoder", False)
+
+    def named_model_components(self, model_components):
+        if self.cfg.model.objective == 'jepa' and len(model_components) == 3:
+            return zip(["encoder", "predictor", "target_encoder"], model_components)
+        return (
+            (component.__class__.__name__, component)
+            for component in model_components
+        )
+
+    def update_target_encoder(self, model_components):
+        if self.cfg.model.objective != 'jepa' or len(model_components) < 3:
+            return
+
+        momentum = self.train_cfg.get("target_ema_momentum", 0.996)
+        online_encoder = self.unwrap_model(model_components[0])
+        target_encoder = self.unwrap_model(model_components[2])
+
+        with torch.no_grad():
+            for online_param, target_param in zip(online_encoder.parameters(), target_encoder.parameters()):
+                target_param.data.mul_(momentum).add_(online_param.data, alpha=1.0 - momentum)
+            for online_buffer, target_buffer in zip(online_encoder.buffers(), target_encoder.buffers()):
+                target_buffer.copy_(online_buffer)
 
     def time_to_completion(self, start_time, i, total_steps):
         steps_per_sec = (i + 1) / (datetime.datetime.now() - start_time).total_seconds()

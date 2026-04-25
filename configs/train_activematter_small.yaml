@@ -20,6 +20,8 @@ train:
   sim_coeff: 2
   std_coeff: 40
   cov_coeff: 2
+  target_encoder_mode: "shared"
+  target_ema_momentum: 0.996
   predict_n_steps: false
   lr_scheduler: "cosine"
   lr_scheduler_warmup_epochs: 2
