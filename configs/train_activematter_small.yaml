@@ -8,6 +8,7 @@ dataset:
 
 model:
   objective: "jepa"
+  loss: "vicreg"
   dims: [16, 32, 64, 128, 128]
   num_res_blocks: [3, 3, 3, 9, 3]
 
