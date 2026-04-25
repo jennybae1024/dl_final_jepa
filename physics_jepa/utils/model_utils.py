@@ -95,13 +95,20 @@ class ConvEncoder(nn.Module):
                  dims=[96, 192, 384, 768],
                  num_frames=4):
         super().__init__()
+
+        self.C = in_chans
+        self.D = dims[0] // in_chans
+        
+
+        assert dims[0] % in_chans == 0, "dims[0] must be divisible by in_chans"
         stem = nn.Sequential(
-            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
+            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same', groups=in_chans),
             LayerNorm(dims[0], data_format="channels_first"),
         )
 
         self.downsample_layers = nn.ModuleList()
         self.downsample_layers.append(stem)
+        self.channel_tokens = nn.Parameter(torch.randn(1, self.C, self.D))
 
         if num_frames == 16:
             for i in range(len(dims)-1):
@@ -178,18 +185,14 @@ class ConvEncoderViTTiny(nn.Module):
                  num_res_blocks=[3, 3, 9, 3],
                  dims=[48, 96, 192, 384]):
         super().__init__()
-        self.C = in_chans
-        self.D = dims[0] // in_chans
-        
 
-        assert dims[0] % in_chans == 0, "dims[0] must be divisible by in_chans"
         
         # Stem: 11 -> 48 channels, no spatial downsampling
         stem = nn.Sequential(
-            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same', groups=in_chans),
+            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
             LayerNorm(dims[0], data_format="channels_first"),
         )
-        self.channel_tokens = nn.Parameter(torch.randn(1, self.C, self.D))
+        
         self.downsample_layers = nn.ModuleList()
         self.downsample_layers.append(stem)
         
