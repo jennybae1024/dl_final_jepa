@@ -96,6 +96,8 @@ class ConvEncoder(nn.Module):
                  num_frames=4):
         super().__init__()
 
+        print(f"Initializing ConvEncoder with dims: {dims}, in_chans: {in_chans}")
+
         self.C = in_chans
         self.D = dims[0] // in_chans
         
