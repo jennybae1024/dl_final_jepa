@@ -697,6 +697,9 @@ class JepaFinetuner(BaseFinetuner):
             if self.cfg.ft.get("use_attentive_pooling", False):
                 # reshape to (batch_size, num_tokens, embed_dim)
                 enc_ctx = rearrange(enc_ctx, 'b c h w -> b (h w) c')
+            else:
+                # Linear/kNN evaluation uses one frozen representation vector per sample.
+                enc_ctx = enc_ctx.mean(dim=(-2, -1))
             # Check for NaN values in the encoded context
             if torch.isnan(enc_ctx).any():
                 raise ValueError(f"NaN values detected in encoded context. Shape: {enc_ctx.shape}, NaN count: {torch.isnan(enc_ctx).sum()}")
