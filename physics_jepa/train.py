@@ -15,6 +15,7 @@ from collections import defaultdict
 import datetime
 import gc
 import copy
+import math
 
 from .data import get_train_dataloader_from_cfg, get_val_dataloader_from_cfg, get_dataset_metadata
 from .model import get_model_and_loss_cnn, get_autoencoder, mse_loss_dict, cosine_loss_dict, HorizonSpecificPredictor
@@ -170,7 +171,7 @@ class Trainer:
             for i, batch in enumerate(batch_pbar):
                 i += self.train_cfg.get("start_step", 0) # add start step to the global step count
 
-                pred, loss_dict = self.step(batch, model_components, loss_fn, self.rank, log=(i == 0 and epoch % 10 == 0))
+                pred, loss_dict = self.step(batch, model_components, loss_fn, self.rank, log=(i == 0 and epoch % 10 == 0), augment=True)
                 if i == 0:
                     distprint(f"train batch {i} pred: {pred[:5]}", local_rank=self.rank)
                     if 'label' in batch:
@@ -251,7 +252,7 @@ class Trainer:
 
         distprint(f"all checkpoints saved to {out_path}", local_rank=self.rank)
 
-    def step(self, batch, model_components, loss_fn, device, log=False):
+    def step(self, batch, model_components, loss_fn, device, log=False, augment=False):
         if 'context' in batch: # B C T H W
             ctx = batch['context'].to(device)
             if log:
@@ -259,10 +260,14 @@ class Trainer:
             if ctx.shape[2] < 4:
                 # pad time dimension to 16 frames to get shapes to work out
                 ctx = F.pad(ctx, (0, 0, 0, 0, 0, 4 - ctx.shape[2]))
+            mask_fraction = None
+            if augment:
+                ctx, mask_fraction = self.apply_context_masking(ctx)
             batch['context'] = ctx
         else:
             ctx = batch['embeddings']
             del ctx
+            mask_fraction = None
 
         if 'target' in batch:
             tgt = batch['target'].to(device)
@@ -273,6 +278,8 @@ class Trainer:
             del tgt
 
         pred, loss_dict = self.pred_fn(batch, model_components, loss_fn)
+        if mask_fraction is not None:
+            loss_dict["context_mask_fraction"] = mask_fraction
 
         if log:
             distprint(f"pred shape: {pred.shape}", local_rank=self.rank)
@@ -282,6 +289,44 @@ class Trainer:
         del batch
 
         return pred, loss_dict
+
+    def apply_context_masking(self, ctx):
+        mask_cfg = self.train_cfg.get("context_masking", None)
+        if mask_cfg is None or not mask_cfg.get("enabled", False):
+            return ctx, None
+
+        mode = mask_cfg.get("mode", "spatiotemporal_block")
+        if mode != "spatiotemporal_block":
+            raise ValueError(f"Unsupported context_masking.mode '{mode}'")
+
+        bsz, channels, timesteps, height, width = ctx.shape
+        mask_ratio = float(mask_cfg.get("mask_ratio", 0.25))
+        mask_ratio = max(0.0, min(mask_ratio, 1.0))
+        if mask_ratio <= 0.0:
+            return ctx, None
+
+        block_size = mask_cfg.get("block_size", [2, 32, 32])
+        if len(block_size) != 3:
+            raise ValueError(f"context_masking.block_size must be [T, H, W], got {block_size}")
+        block_t = max(1, min(int(block_size[0]), timesteps))
+        block_h = max(1, min(int(block_size[1]), height))
+        block_w = max(1, min(int(block_size[2]), width))
+
+        mask = torch.zeros((bsz, 1, timesteps, height, width), device=ctx.device, dtype=torch.bool)
+        target_voxels = int(round(mask_ratio * timesteps * height * width))
+        block_voxels = block_t * block_h * block_w
+        num_blocks = max(1, int(math.ceil(target_voxels / block_voxels)))
+
+        for batch_idx in range(bsz):
+            for _ in range(num_blocks):
+                t0 = torch.randint(0, timesteps - block_t + 1, (), device=ctx.device).item()
+                h0 = torch.randint(0, height - block_h + 1, (), device=ctx.device).item()
+                w0 = torch.randint(0, width - block_w + 1, (), device=ctx.device).item()
+                mask[batch_idx, :, t0:t0 + block_t, h0:h0 + block_h, w0:w0 + block_w] = True
+
+        mask_value = float(mask_cfg.get("mask_value", 0.0))
+        ctx = ctx.masked_fill(mask.expand(-1, channels, -1, -1, -1), mask_value)
+        return ctx, mask.float().mean()
 
     def pred_fn(self, batch, model_components, loss_fn):
         raise NotImplementedError("pred_fn must be implemented in subclass")
