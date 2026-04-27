@@ -6,5 +6,5 @@ torchrun --nproc_per_node=2 --standalone \
     configs/train_activematter_small.yaml \
     train.target_encoder_mode=ema \
     model.loss=mse \
-    train.run_name=ijepa-like-ema \
+    train.run_name=ijepa_ema_mse \
     "$@"

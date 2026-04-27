@@ -77,7 +77,8 @@ class Trainer:
 
         run_name = f"{self.cfg.dataset.name}-{self.cfg.dataset.num_frames}frames-{self.cfg.model.name}-{self.cfg.model.objective}"
         if self.train_cfg.get("run_name", None) is not None:
-            run_name = f"{run_name}-{self.train_cfg.run_name}"
+        #    run_name = f"{run_name}-{self.train_cfg.run_name}"
+            run_name = f"{self.train_cfg.run_name}"
         if self.rank == 0 and not self.cfg.dry_run:
             wandb.init(project="physics-jepa" if 'seed' not in self.cfg.out_path else "physics-jepa-seeds",
                 name=run_name,
