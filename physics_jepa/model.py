@@ -1,5 +1,6 @@
 import copy
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from functools import partial
@@ -7,6 +8,33 @@ from einops import rearrange
 from collections import defaultdict
 
 from physics_jepa.utils.model_utils import ConvEncoder, ConvPredictor, ConvDecoder
+
+
+class HorizonSpecificPredictor(nn.Module):
+    def __init__(self, predictor_factory, offsets):
+        super().__init__()
+        self.offsets = [int(offset) for offset in offsets]
+        self.predictors = nn.ModuleDict({
+            str(offset): predictor_factory() for offset in self.offsets
+        })
+
+    def forward(self, x, offsets=None):
+        if offsets is None:
+            if len(self.offsets) != 1:
+                raise ValueError("offsets must be provided when using multiple horizon-specific predictors")
+            return self.predictors[str(self.offsets[0])](x)
+        return self.predict_by_offset(x, offsets)
+
+    def predict_by_offset(self, x, offsets):
+        requested_offsets = sorted(set(int(offset) for offset in offsets))
+        missing_offsets = [offset for offset in requested_offsets if str(offset) not in self.predictors]
+        if missing_offsets:
+            raise ValueError(f"Missing horizon-specific predictors for offsets {missing_offsets}")
+
+        return {
+            offset: self.predictors[str(offset)](x)
+            for offset in requested_offsets
+        }
 
 def get_model_and_loss_cnn(dims, num_res_blocks, num_frames, in_chans=2, sim_coeff=25, std_coeff=25, cov_coeff=1):
     encoder = ConvEncoder(
@@ -26,6 +54,12 @@ def get_model_and_loss_cnn(dims, num_res_blocks, num_frames, in_chans=2, sim_coe
 
 def mse_loss_dict(x, y):
     return {"loss": F.mse_loss(x, y)}
+
+
+def cosine_loss_dict(x, y):
+    return {
+        "loss": 1.0 - F.cosine_similarity(x, y, dim=1).mean()
+    }
 
 def vicreg_loss_3d(
     x, y, sim_coeff, std_coeff, cov_coeff, n_chunks=10,

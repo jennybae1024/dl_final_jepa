@@ -17,8 +17,8 @@ import gc
 import copy
 
 from .data import get_train_dataloader_from_cfg, get_val_dataloader_from_cfg, get_dataset_metadata
-from .model import get_model_and_loss_cnn, get_autoencoder, mse_loss_dict
-from .utils.model_utils import CosineLRScheduler
+from .model import get_model_and_loss_cnn, get_autoencoder, mse_loss_dict, cosine_loss_dict, HorizonSpecificPredictor
+from .utils.model_utils import CosineLRScheduler, ConvPredictor
 from .utils.data_utils import mae
 from .utils.hydra import compose
 from .utils.misc import distprint
@@ -337,6 +337,21 @@ class Trainer:
                 state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
                 predictor.load_state_dict(state_dict)
 
+            use_horizon_specific_predictors = (
+                self.train_cfg.get("horizon_specific_predictors", False)
+                or self.train_cfg.get("horizon_specific_heads", False)
+            )
+            if use_horizon_specific_predictors:
+                if self.train_cfg.get("predictor_path", None) is not None:
+                    raise ValueError("predictor_path is not supported with horizon_specific_predictors")
+                target_offsets = self.cfg.dataset.get("target_offsets", None)
+                if target_offsets is None:
+                    target_offsets = [1]
+                predictor = HorizonSpecificPredictor(
+                    lambda: ConvPredictor(dims=list(reversed(encoder.dims))[:2]),
+                    offsets=target_offsets,
+                )
+
             target_encoder_mode = self.train_cfg.get("target_encoder_mode", "shared")
             if target_encoder_mode not in ["shared", "ema"]:
                 raise ValueError(f"target_encoder_mode must be 'shared' or 'ema', got {target_encoder_mode}")
@@ -364,8 +379,10 @@ class Trainer:
             loss_name = self.cfg.model.get("loss", "vicreg")
             if loss_name in ["mse", "l2"]:
                 loss_fn = mse_loss_dict
+            elif loss_name == "cosine":
+                loss_fn = cosine_loss_dict
             elif loss_name not in ["vicreg", "gaussian_matching"]:
-                raise ValueError(f"Unsupported JEPA loss '{loss_name}'. Use 'vicreg', 'mse', 'l2', or 'gaussian_matching'.")
+                raise ValueError(f"Unsupported JEPA loss '{loss_name}'. Use 'vicreg', 'mse', 'l2', 'cosine', or 'gaussian_matching'.")
             distprint(f"JEPA loss: {loss_name}", local_rank=self.rank)
 
         elif self.cfg.model.objective == 'ae':
