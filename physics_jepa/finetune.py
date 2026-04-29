@@ -14,7 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--rank", type=int, default=0)
     parser.add_argument("--world_size", type=int, default=1)
     parser.add_argument("--dry_run", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
 
     cfg = compose(args.config, args.overrides)
     OmegaConf.set_struct(cfg, False)
