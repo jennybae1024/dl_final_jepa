@@ -325,6 +325,7 @@ class BaseFinetuner(Trainer, ABC):
         persistent_workers = self.cfg.ft.get("persistent_workers", True)
         pin_memory = self.cfg.ft.get("pin_memory", True)
         prefetch_factor = self.cfg.ft.get("prefetch_factor", 2)
+        eval_split = self.cfg.ft.get("eval_split", self.cfg.dataset.get("eval_split", "val"))
 
         # make new loaders that have larger batch size for calculating embeddings
         self.train_loader = get_train_dataloader(
@@ -353,6 +354,7 @@ class BaseFinetuner(Trainer, ABC):
             self.cfg.dataset.num_frames,
             self.cfg.dataset.get("num_examples", None),
             self.cfg.ft.batch_size,
+            split=eval_split,
             shuffle=True,
             include_labels=True,
             predict_n_steps=False,
@@ -384,12 +386,13 @@ class BaseFinetuner(Trainer, ABC):
         os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 
         runpath = Path(self.trained_model_path) if self.trained_model_path is not None else Path(f"{self.cfg.dataset.name}-{self.cfg.dataset.num_frames}frames-{str(self.cfg.ft.get('fields', None)) + 'fields-' if self.cfg.ft.get('fields', None) is not None else ''}-{self.cfg.model.objective}-{self.cfg.ft.task}/randominit-seed{self.seed}")
+        eval_split = self.cfg.ft.get("eval_split", self.cfg.dataset.get("eval_split", "val"))
         if runpath.parent.name == "checkpoints": # backwards compatibility w/ old model paths that weren't nested
             train_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.name}_embeddings_train.h5"
-            val_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.name}_embeddings_val.h5" 
+            val_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.name}_embeddings_{eval_split}.h5" 
         else:
             train_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.parent.name}_{runpath.name}_{'noise-' + str(self.cfg.ft.get('noise_std', 0.0)) + '_' if self.cfg.ft.get('noise_std', 0.0) > 0.0 else ''}embeddings_train.h5"
-            val_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.parent.name}_{runpath.name}_{'noise-' + str(self.cfg.ft.get('noise_std', 0.0)) + '_' if self.cfg.ft.get('noise_std', 0.0) > 0.0 else ''}embeddings_val.h5"
+            val_embeddings_path = Path(self.cfg.ft.embeddings_dir) / f"{runpath.parent.name}_{runpath.name}_{'noise-' + str(self.cfg.ft.get('noise_std', 0.0)) + '_' if self.cfg.ft.get('noise_std', 0.0) > 0.0 else ''}embeddings_{eval_split}.h5"
 
         if train_embeddings_path.exists() and not self._is_valid_embeddings_file(train_embeddings_path):
             print(f"Found corrupted train embeddings file at {train_embeddings_path}; rebuilding", flush=True)

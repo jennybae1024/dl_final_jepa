@@ -325,8 +325,20 @@ class Trainer:
                 w0 = torch.randint(0, width - block_w + 1, (), device=ctx.device).item()
                 mask[batch_idx, :, t0:t0 + block_t, h0:h0 + block_h, w0:w0 + block_w] = True
 
-        mask_value = float(mask_cfg.get("mask_value", 0.0))
-        ctx = ctx.masked_fill(mask.expand(-1, channels, -1, -1, -1), mask_value)
+        mask_value = mask_cfg.get("mask_value", 0.0)
+        expanded_mask = mask.expand(-1, channels, -1, -1, -1)
+        if isinstance(mask_value, str):
+            if mask_value not in ["channel_mean", "mean"]:
+                raise ValueError(
+                    f"Unsupported context_masking.mask_value '{mask_value}'. "
+                    "Use a numeric value or 'channel_mean'."
+                )
+            keep_mask = (~mask).to(ctx.dtype)
+            fill_value = (ctx * keep_mask).sum(dim=(2, 3, 4), keepdim=True)
+            fill_value = fill_value / keep_mask.sum(dim=(2, 3, 4), keepdim=True).clamp_min(1.0)
+            ctx = torch.where(expanded_mask, fill_value, ctx)
+        else:
+            ctx = ctx.masked_fill(expanded_mask, float(mask_value))
         return ctx, mask.float().mean()
 
     def pred_fn(self, batch, model_components, loss_fn):

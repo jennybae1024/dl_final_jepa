@@ -79,6 +79,7 @@ scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
 ```
 
 The code reports overall MSE and per-target MSE (e.g., `alpha`, `zeta`) on both train and validation splits.
+To run the same evaluation path on the test split, add `ft.eval_split=test` to the command; the code will still log metrics with the existing `val/...` keys, but the dataloader will read `data/test`.
 
 ## Baselines
 

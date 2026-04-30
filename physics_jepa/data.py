@@ -701,11 +701,13 @@ def get_train_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None
     )
 
 def get_val_dataloader_from_cfg(cfg, stage="train", rank=None, world_size=None):
+    eval_split = cfg[stage].get("eval_split", cfg.dataset.get("eval_split", "val"))
     return get_val_dataloader(
         cfg.dataset.name,
         cfg.dataset.num_frames,
         cfg.dataset.get("num_examples", None),
         cfg[stage].batch_size,
+        split=eval_split,
         include_labels=(stage == "ft" or cfg[stage].include_labels),
         predict_n_steps=cfg[stage].get("predict_n_steps", False),
         n_steps=cfg[stage].get("n_steps", 1),
@@ -829,10 +831,11 @@ def get_val_dataloader(
         offset=None,
         target_offsets=None,
         noise_std=0.0,
+        split="val",
     ):
     dataset = get_dataset(dataset_name, 
                           num_frames, 
-                          split="val", 
+                          split=split, 
                           include_labels=include_labels, 
                           num_examples=num_examples, 
                           predict_n_steps=predict_n_steps, 
