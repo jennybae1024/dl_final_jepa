@@ -4,7 +4,10 @@ batch_size: 128
 report_every: 100
 save_every: 10
 head_type: knn
+use_attentive_pooling: false
+task: regression
 embeddings_dir: "./embeddings"
+eval_split: val
 knn_k: 20
 knn_weights: distance
 knn_metric: minkowski

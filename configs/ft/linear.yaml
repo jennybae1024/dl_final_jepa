@@ -8,3 +8,4 @@ best_metric_name: val/loss
 best_metric_mode: min
 head_type: linear
 embeddings_dir: "./embeddings"
+eval_split: val
