@@ -2,6 +2,8 @@
 
 This repository is used for Active Matter JEPA pretraining and representation evaluation.
 
+Reproducible experiment configurations and runnable training/evaluation scripts are detailed in [`EXPERIMENTS.md`](EXPERIMENTS.md).
+
 ## Installation
 
 Requirements:
