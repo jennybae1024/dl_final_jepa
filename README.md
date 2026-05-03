@@ -99,7 +99,7 @@ Add these overrides:
 
 Channel-wise encoding requires the first model dimension to be divisible by the number of input channels. Active Matter uses 11 input channels, so the default `model.dims=[16,32,64,128,128]` does not work for channel-wise encoding because 16 is not divisible by 11.
 
-Use your partner's channel-wise encoder dimensions:
+Example channel-wise encoder dimensions:
 
 ```bash
 +model.channel_wise_encoding=true \
@@ -119,6 +119,8 @@ scripts/active_matter/run_train_jepa.sh \
   train.save_every=1 \
   out_path=./checkpoints/jepa_channel_six
 ```
+
+To reproduce probing for channel-wise, add this argument to the scripts for both linear and knn
 
 ## Full Example
 
