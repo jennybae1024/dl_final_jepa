@@ -6,4 +6,3 @@ python -m physics_jepa.finetune \
     configs/train_activematter_small.yaml \
     --trained_model_path "$1" \
     "${@:2}"
-

@@ -267,6 +267,7 @@ class BaseFinetuner(Trainer, ABC):
         val_pred = knn.predict(val_x)
 
         target_names = list(getattr(metadata, "constant_scalar_names", []))
+        
         metrics = {}
         metrics.update(self._regression_metrics(train_pred, train_y, target_names, "train"))
         metrics.update(self._regression_metrics(val_pred, val_y, target_names, "val"))
@@ -633,11 +634,17 @@ class JepaFinetuner(BaseFinetuner):
             self.cfg.model.num_res_blocks,
             self.cfg.dataset.num_frames,
             in_chans=self.cfg.dataset.num_chans if 'fields' not in self.cfg.ft else len(self.cfg.ft.fields),
+            channel_wise_encoding=self.cfg.model.get("channel_wise_encoding", False),
         )
         if self.trained_model_path is not None:
             resolved_checkpoint = self._resolve_checkpoint_file(self.trained_model_path, prefer_encoder=True)
             print(f"loading state dict from {resolved_checkpoint}", flush=True)
             state_dict = torch.load(resolved_checkpoint)
+            for name, param in encoder.named_parameters():
+                print(name, param.shape)
+            for k in state_dict:
+                print(k)
+
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             encoder.load_state_dict(state_dict)
         else:

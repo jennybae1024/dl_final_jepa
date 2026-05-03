@@ -92,12 +92,30 @@ class ConvEncoder(nn.Module):
                  in_chans=2,
                  num_res_blocks=[3, 3, 9, 3],
                  dims=[96, 192, 384, 768],
-                 num_frames=4):
+                 num_frames=4,
+                 channel_wise_encoding=False):
         super().__init__()
-        stem = nn.Sequential(
-            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
-            LayerNorm(dims[0], data_format="channels_first"),
-        )
+
+        self.channel_wise_encoding = channel_wise_encoding
+        if channel_wise_encoding:
+            if dims[0] % in_chans != 0:
+                raise ValueError(
+                    f"channel_wise_encoding requires dims[0] ({dims[0]}) to be divisible by in_chans ({in_chans})"
+                )
+            self.C = in_chans
+            self.D = dims[0] // in_chans
+            stem = nn.Sequential(
+                nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same', groups=in_chans),
+                LayerNorm(dims[0], data_format="channels_first"),
+            )
+            self.channel_tokens = nn.Parameter(torch.randn(1, self.C, self.D))
+        else:
+            self.C = 0
+            self.D = 0
+            stem = nn.Sequential(
+                nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
+                LayerNorm(dims[0], data_format="channels_first"),
+            )
 
         self.downsample_layers = nn.ModuleList()
         self.downsample_layers.append(stem)
@@ -153,6 +171,14 @@ class ConvEncoder(nn.Module):
     def forward(self, x, **kwargs):
         for i in range(len(self.dims)):
             x = self.downsample_layers[i](x)
+
+            if self.channel_wise_encoding and i == 0:
+                B, CD, T, H, W = x.shape
+                C, D = self.C, self.D
+                x = x.view(B, C, D, T, H, W)
+                tokens = self.channel_tokens.view(1, C, D, 1, 1, 1)
+                x = (x + tokens).view(B, C * D, T, H, W)
+
             x = x.squeeze(2)
             x = self.res_blocks[i](x)
         return x
@@ -163,6 +189,7 @@ class ConvEncoderViTTiny(nn.Module):
                  num_res_blocks=[3, 3, 9, 3],
                  dims=[48, 96, 192, 384]):
         super().__init__()
+
         
         # Stem: 11 -> 48 channels, no spatial downsampling
         stem = nn.Sequential(

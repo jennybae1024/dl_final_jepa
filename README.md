@@ -1,67 +1,154 @@
-This is the official code repository for the paper [Representation Learning for Spatiotemporal Physical Systems](https://arxiv.org/abs/2603.13227).
+# Active Matter JEPA Experiments
+
+This repository is used for Active Matter JEPA pretraining and representation evaluation.
 
 ## Installation
 
-**Requirements:** Python 3.10+, PyTorch 2.0+ with CUDA.
+Requirements:
 
-Clone the repository and install dependencies:
+- Python 3.10+
+- PyTorch 2.0+ with CUDA
+- The Well dataset package and Active Matter data
+
+Install the project dependencies:
 
 ```bash
-git clone https://github.com/your-org/physics_jepa_public
-cd physics_jepa_public
 pip install torch torchvision einops omegaconf wandb tqdm h5py psutil scikit-learn timm the-well
 pip install -e .
 ```
 
-### Environment setup
+## Active Matter JEPA Pretraining
 
-Edit `scripts/env_setup.sh` to activate your virtual environment and set the path to [The Well](https://github.com/PolymathicAI/the_well) datasets. This file is sourced automatically by all scripts. The `THE_WELL_DATA_DIR` variable is required by all training and finetuning scripts that use The Well data.
-
-## Training
-
-### 1. JEPA pretraining
-
-Pretrain a convolutional JEPA encoder on a physics dataset using the scripts in `scripts/<dataset>/`:
-
-| Dataset | Script |
-|---|---|
-| Shear flow | `scripts/shear_flow/run_train_jepa.sh` |
-| Rayleigh-Bénard | `scripts/rayleigh_benard/run_train_jepa.sh` |
-| Active matter | `scripts/active_matter/run_train_jepa.sh` |
-
-Config fields `out_path` and `cache_path` control where checkpoints and dataset caches are written. Key training hyperparameters (learning rate, number of epochs, noise level, etc.) are set in the `train:` block of the corresponding config. Config fields can be overridden from the command line by passing `key=value` arguments to the script, e.g.:
+Use:
 
 ```bash
-scripts/shear_flow/run_train_jepa.sh train.num_epochs=10 train.lr=5e-4
+scripts/active_matter/run_train_jepa.sh
 ```
 
-### 2. VideoMAE finetuning (baseline)
+The script runs:
 
-Fine-tune a pretrained [VideoMAE](https://github.com/MCG-NJU/VideoMAE) backbone for physical parameter estimation. Set the `CHECKPOINT_PATH` environment variable to the pretrained VideoMAE checkpoint and run the appropriate script:
+```bash
+torchrun --nproc_per_node=2 --standalone \
+  -m physics_jepa.train_jepa \
+  configs/train_activematter_small.yaml
+```
 
-| Dataset | Script |
-|---|---|
-| Shear flow | `scripts/shear_flow/run_finetune_videomae.sh` |
-| Rayleigh-Bénard | `scripts/rayleigh_benard/run_finetune_videomae.sh` |
-| Active matter | `scripts/active_matter/run_finetune_videomae.sh` |
+Config values can be changed from the command line with Hydra-style overrides:
 
-### 3. JEPA finetuning (parameter estimation)
+```bash
+scripts/active_matter/run_train_jepa.sh \
+  train.num_epochs=6 \
+  train.lr=5e-4 \
+  train.save_every=1 \
+  out_path=./checkpoints/jepa_six
+```
 
-Fine-tune a pretrained JEPA encoder for physical parameter estimation. Set `CHECKPOINT_PATH` to a saved encoder checkpoint and run the appropriate script:
+## Experiment Design Switches
 
-| Dataset | Script |
-|---|---|
-| Shear flow | `scripts/shear_flow/run_finetune_jepa.sh` |
-| Rayleigh-Bénard | `scripts/rayleigh_benard/run_finetune_jepa.sh` |
-| Active matter | `scripts/active_matter/run_finetune_jepa.sh` |
+Use these overrides to turn each experiment component on or off.
 
-The same configs used for pretraining are reused here; the `ft:` block controls finetuning hyperparameters. A multi-GPU variant is available at `scripts/shear_flow/run_finetune_jepa_ddp.sh`.
+| Component | Off / baseline | On / experimental |
+|---|---|---|
+| EMA target encoder | `train.target_encoder_mode=shared` | `train.target_encoder_mode=ema` |
+| VicReg loss | `model.loss=mse` or `model.loss=cosine` | `model.loss=vicreg` |
+| Multi-horizon targets | `dataset.target_offsets=[1]` | `dataset.target_offsets=[1,2] train.target_offset_weights=[0.75,0.25]` |
+| Horizon-specific predictors | `train.horizon_specific_predictors=false` | `train.horizon_specific_predictors=true` |
+| Context masking | omit `train.context_masking` overrides | use the masking overrides below |
+| Channel-wise encoding | `model.channel_wise_encoding=false` | `model.channel_wise_encoding=true model.dims=[22,32,64,128,128]` |
 
-### 3b. Representation evaluation (linear probe + kNN)
+### EMA Target Encoder + VicReg
 
-To evaluate frozen JEPA representations for continuous parameter prediction (z-scored labels, MSE), run:
+```bash
+scripts/active_matter/run_train_jepa.sh \
+  train.target_encoder_mode=ema \
+  model.loss=vicreg \
+  train.num_epochs=6 \
+  train.lr=5e-4 \
+  train.save_every=1 \
+  out_path=./checkpoints/jepa_ema_vicreg
+```
 
-- **Single linear layer probe** (freeze encoder, train linear head):
+### Multi-Horizon Prediction
+
+Add these overrides:
+
+```bash
+dataset.target_offsets=[1,2] \
+train.target_offset_weights=[0.75,0.25]
+```
+
+To use separate predictors for each horizon, also add:
+
+```bash
+train.horizon_specific_predictors=true
+```
+
+### Context Masking
+
+Add these overrides:
+
+```bash
++train.context_masking.enabled=true \
++train.context_masking.mode=spatiotemporal_block \
++train.context_masking.mask_ratio=0.10 \
++train.context_masking.block_size=[2,32,32] \
++train.context_masking.mask_value=channel_mean
+```
+
+### Channel-Wise Encoding
+
+Channel-wise encoding requires the first model dimension to be divisible by the number of input channels. Active Matter uses 11 input channels, so the default `model.dims=[16,32,64,128,128]` does not work for channel-wise encoding because 16 is not divisible by 11.
+
+Use your partner's channel-wise encoder dimensions:
+
+```bash
+model.channel_wise_encoding=true \
+model.dims=[22,32,64,128,128]
+```
+
+With `model.dims=[22,32,64,128,128]`, the first encoder layer allocates 2 channels of embedding capacity per input channel because `22 / 11 = 2`. Channel-wise encoding changes the first encoder stem to grouped per-channel convolution and adds learned channel tokens. Keep it off when comparing against the original dense encoder.
+
+To reproduce the channel-wise experiment design setup, use both the channel-wise flag and the compatible dimensions:
+
+```bash
+scripts/active_matter/run_train_jepa.sh \
+  model.channel_wise_encoding=true \
+  model.dims=[22,32,64,128,128] \
+  train.num_epochs=6 \
+  train.lr=5e-4 \
+  train.save_every=1 \
+  out_path=./checkpoints/jepa_channel_six
+```
+
+## Full Example
+
+EMA target encoder, VicReg loss, multi-horizon targets, context masking, and channel-wise encoding:
+
+```bash
+scripts/active_matter/run_train_jepa.sh \
+  train.target_encoder_mode=ema \
+  model.loss=vicreg \
+  dataset.target_offsets=[1,2] \
+  train.target_offset_weights=[0.75,0.25] \
+  +train.context_masking.enabled=true \
+  +train.context_masking.mode=spatiotemporal_block \
+  +train.context_masking.mask_ratio=0.10 \
+  +train.context_masking.block_size=[2,32,32] \
+  +train.context_masking.mask_value=channel_mean \
+  model.channel_wise_encoding=true \
+  model.dims=[22,32,64,128,128] \
+  train.num_epochs=6 \
+  train.lr=5e-4 \
+  train.save_every=1 \
+  train.run_name=jepa-ema-vicreg-mh-mask-channelwise \
+  out_path=./checkpoints/jepa-ema-vicreg-mh-mask-channelwise
+```
+
+## Representation Evaluation
+
+Use a saved JEPA encoder checkpoint for frozen representation evaluation.
+
+Linear probe:
 
 ```bash
 scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
@@ -70,7 +157,7 @@ scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
   ft.task=regression
 ```
 
-- **kNN regression** (freeze encoder, no head training):
+kNN regression:
 
 ```bash
 scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
@@ -78,27 +165,10 @@ scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
   ft.task=regression
 ```
 
-The code reports overall MSE and per-target MSE (e.g., `alpha`, `zeta`) on both train and validation splits.
-To run the same evaluation path on the test split, add `ft.eval_split=test` to the command; the code will still log metrics with the existing `val/...` keys, but the dataloader will read `data/test`.
-
-## Baselines
-
-### 4. DISCO finetuning
-
-[DISCO](https://arxiv.org/abs/2401.09246) is a latent-space parameter estimation baseline. It operates on precomputed DISCO latent representations rather than raw data. Pass the path to a directory of DISCO inference outputs as the first argument:
+To evaluate on the test split, add:
 
 ```bash
-scripts/run_finetune_disco.sh /path/to/disco_inference_shear_flow
+ft.eval_split=test
 ```
 
-The data directory name must match one of the dataset keys in `physics_jepa/baselines/disco.py` (e.g. `disco_inference_shear_flow`, `disco_inference_rayleigh_benard`, `disco_inference_active_matter`).
-
-### 5. MPP finetuning
-
-Fine-tune a pretrained [MPP](https://github.com/PolymathicAI/multiple_physics_pretraining) (Multiple Physics Pretraining) model for physical parameter estimation. Pass the dataset name and path to a pretrained MPP checkpoint:
-
-```bash
-scripts/run_mpp_param_estimation.sh shear_flow /path/to/MPP_AViT_Ti
-```
-
-`--dataset_name` should match the corresponding dataset directory name in `THE_WELL_DATA_DIR`. The checkpoint save directory can be controlled via the `CHECKPOINT_DIR` environment variable (defaults to `./checkpoints`).
+Metrics include overall MSE and per-target MSE for Active Matter labels such as `alpha` and `zeta`.

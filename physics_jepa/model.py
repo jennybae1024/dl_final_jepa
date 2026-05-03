@@ -36,12 +36,22 @@ class HorizonSpecificPredictor(nn.Module):
             for offset in requested_offsets
         }
 
-def get_model_and_loss_cnn(dims, num_res_blocks, num_frames, in_chans=2, sim_coeff=25, std_coeff=25, cov_coeff=1):
+def get_model_and_loss_cnn(
+    dims,
+    num_res_blocks,
+    num_frames,
+    in_chans=2,
+    sim_coeff=25,
+    std_coeff=25,
+    cov_coeff=1,
+    channel_wise_encoding=False,
+):
     encoder = ConvEncoder(
         dims=dims,
         in_chans=in_chans,
         num_res_blocks=num_res_blocks,
         num_frames=num_frames,
+        channel_wise_encoding=channel_wise_encoding,
     )
     loss = partial(vicreg_loss_3d,
                 sim_coeff=sim_coeff,

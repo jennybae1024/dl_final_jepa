@@ -382,6 +382,7 @@ class Trainer:
                 sim_coeff=self.train_cfg.sim_coeff,
                 std_coeff=self.train_cfg.std_coeff,
                 cov_coeff=self.train_cfg.cov_coeff,
+                channel_wise_encoding=self.cfg.model.get("channel_wise_encoding", False),
             )
 
             if 'encoder_path' in self.train_cfg and self.train_cfg.encoder_path is not None:
@@ -417,6 +418,7 @@ class Trainer:
             distprint(f"num encoder parameters: {sum(p.numel() for p in encoder.parameters())}", local_rank=self.rank)
             distprint(f"num predictor parameters: {sum(p.numel() for p in predictor.parameters())}", local_rank=self.rank)
             distprint(f"target encoder mode: {target_encoder_mode}", local_rank=self.rank)
+            distprint(f"channel-wise encoding: {self.cfg.model.get('channel_wise_encoding', False)}", local_rank=self.rank)
             distprint(summarize_convs(encoder), local_rank=self.rank)
 
             model_components = [encoder, predictor]
@@ -468,6 +470,7 @@ class Trainer:
                 self.cfg.model.num_res_blocks,
                 self.cfg.dataset.num_frames,
                 in_chans=self.cfg.dataset.num_chans if 'fields' not in self.train_cfg else len(self.train_cfg.fields),
+                channel_wise_encoding=self.cfg.model.get("channel_wise_encoding", False),
             )
             metadata = get_dataset_metadata(self.cfg.dataset.name)
             head = AttentiveClassifier(
@@ -508,8 +511,11 @@ class Trainer:
         return getattr(self.unwrap_model(component), "_is_ema_target_encoder", False)
 
     def named_model_components(self, model_components):
-        if self.cfg.model.objective == 'jepa' and len(model_components) == 3:
-            return zip(["encoder", "predictor", "target_encoder"], model_components)
+        if self.cfg.model.objective == 'jepa':
+            names = ["encoder", "predictor"]
+            if len(model_components) == 3:
+                names.append("target_encoder")
+            return zip(names, model_components)
         return (
             (component.__class__.__name__, component)
             for component in model_components
