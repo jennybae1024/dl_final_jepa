@@ -98,15 +98,21 @@ class ConvEncoder(nn.Module):
 
         print(f"Initializing ConvEncoder with dims: {dims}, in_chans: {in_chans}")
 
-        self.C = in_chans
-        self.D = dims[0] // in_chans
-        
+        if (dims[0] % in_chans == 0):
+            self.C = in_chans
+            self.D = dims[0] // in_chans
 
-        assert dims[0] % in_chans == 0, "dims[0] must be divisible by in_chans"
-        stem = nn.Sequential(
+            stem = nn.Sequential(
             nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same', groups=in_chans),
-            LayerNorm(dims[0], data_format="channels_first"),
-        )
+            LayerNorm(dims[0], data_format="channels_first"),)
+
+        else:
+            self.C = 0
+            self.D = 0
+            stem = nn.Sequential(
+            nn.Conv3d(in_chans, dims[0], kernel_size=(1, 4, 4), padding='same'),
+            LayerNorm(dims[0], data_format="channels_first"),)
+
 
         self.downsample_layers = nn.ModuleList()
         self.downsample_layers.append(stem)
@@ -168,15 +174,18 @@ class ConvEncoder(nn.Module):
                 B, CD, T, H, W = x.shape
                 C, D = self.C, self.D
 
-                # reshape to separate channels
-                x = x.view(B, C, D, T, H, W)
+                if C*D == CD:
+                    # reshape to separate channels
+                    x = x.view(B, C, D, T, H, W)
 
-                # add channel tokens
-                tokens = self.channel_tokens.view(1, C, D, 1, 1, 1)
-                x = x + tokens
+                    # add channel tokens
+                    tokens = self.channel_tokens.view(1, C, D, 1, 1, 1)
+                    x = x + tokens
 
-                # fuse back
-                x = x.view(B, C * D, T, H, W)
+                    # fuse back
+                    x = x.view(B, C * D, T, H, W)
+                else:
+                    x = x + 0 * self.channel_tokens.sum()
             
             x = x.squeeze(2)
             x = self.res_blocks[i](x)

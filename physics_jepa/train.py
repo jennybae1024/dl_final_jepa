@@ -433,8 +433,11 @@ class Trainer:
         return getattr(self.unwrap_model(component), "_is_ema_target_encoder", False)
 
     def named_model_components(self, model_components):
-        if self.cfg.model.objective == 'jepa' and len(model_components) == 3:
-            return zip(["encoder", "predictor", "target_encoder"], model_components)
+        if self.cfg.model.objective == 'jepa':
+            names = ["encoder", "predictor"]
+            if len(model_components) == 3:
+                names.append("target_encoder")
+            return zip(names, model_components)
         return (
             (component.__class__.__name__, component)
             for component in model_components

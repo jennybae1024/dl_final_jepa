@@ -267,6 +267,7 @@ class BaseFinetuner(Trainer, ABC):
         val_pred = knn.predict(val_x)
 
         target_names = list(getattr(metadata, "constant_scalar_names", []))
+        
         metrics = {}
         metrics.update(self._regression_metrics(train_pred, train_y, target_names, "train"))
         metrics.update(self._regression_metrics(val_pred, val_y, target_names, "val"))
@@ -635,6 +636,11 @@ class JepaFinetuner(BaseFinetuner):
             resolved_checkpoint = self._resolve_checkpoint_file(self.trained_model_path, prefer_encoder=True)
             print(f"loading state dict from {resolved_checkpoint}", flush=True)
             state_dict = torch.load(resolved_checkpoint)
+            for name, param in encoder.named_parameters():
+                print(name, param.shape)
+            for k in state_dict:
+                print(k)
+
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             encoder.load_state_dict(state_dict)
         else:
@@ -697,6 +703,9 @@ class JepaFinetuner(BaseFinetuner):
             if self.cfg.ft.get("use_attentive_pooling", False):
                 # reshape to (batch_size, num_tokens, embed_dim)
                 enc_ctx = rearrange(enc_ctx, 'b c h w -> b (h w) c')
+            else:
+                # Linear/kNN evaluation uses one frozen representation vector per sample.
+                enc_ctx = enc_ctx.mean(dim=[-2, -1])
             # Check for NaN values in the encoded context
             if torch.isnan(enc_ctx).any():
                 raise ValueError(f"NaN values detected in encoded context. Shape: {enc_ctx.shape}, NaN count: {torch.isnan(enc_ctx).sum()}")
