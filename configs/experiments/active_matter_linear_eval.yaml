@@ -1,0 +1,45 @@
+defaults:
+  - /dataset: active_matter
+  - /model: conv_small
+  - /ft: linear
+  - _self_
+
+dataset:
+  num_frames: 16
+  target_offsets: [1]
+
+model:
+  objective: "jepa"
+  loss: "vicreg"
+  channel_wise_encoding: false
+  dims: [16, 32, 64, 128, 128]
+  num_res_blocks: [3, 3, 3, 9, 3]
+
+train:
+  include_labels: false
+  distributed: true
+
+ft:
+  task: "regression"
+  head_type: "linear"
+  use_attentive_pooling: false
+  batch_size: 8
+  num_epochs: 100
+  report_every: 100
+  save_every: 10
+  save_best_checkpoint: false
+  best_metric_name: "val/loss"
+  best_metric_mode: "min"
+  lr_scheduler: "cosine"
+  lr_scheduler_warmup_epochs: 2
+  min_lr: 0
+  lr: 1e-5
+  weight_decay: 0.01
+  noise_std: 0.0
+  eval_split: "val"
+  embeddings_dir: "./embeddings"
+  run_name: "activematter-jepa-linear-val-regression"
+  distributed: false
+
+out_path: "./checkpoints/active_matter_linear_eval"
+cache_path: "./dataset_cache"

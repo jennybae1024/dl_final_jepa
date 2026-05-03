@@ -1,0 +1,37 @@
+defaults:
+  - /dataset: active_matter
+  - /model: conv_small
+  - /ft: knn
+  - _self_
+
+dataset:
+  num_frames: 16
+  target_offsets: [1]
+
+model:
+  objective: "jepa"
+  loss: "vicreg"
+  channel_wise_encoding: false
+  dims: [16, 32, 64, 128, 128]
+  num_res_blocks: [3, 3, 3, 9, 3]
+
+train:
+  include_labels: false
+  distributed: true
+
+ft:
+  task: "regression"
+  head_type: "knn"
+  use_attentive_pooling: false
+  batch_size: 8
+  num_epochs: 100
+  report_every: 100
+  save_every: 10
+  embeddings_dir: "./embeddings"
+  noise_std: 0.0
+  eval_split: "test"
+  run_name: "activematter-jepa-knn-test-regression"
+  distributed: false
+
+out_path: "./checkpoints/active_matter_knn_eval"
+cache_path: "./dataset_cache"

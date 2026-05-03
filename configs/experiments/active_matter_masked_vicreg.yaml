@@ -1,0 +1,61 @@
+defaults:
+  - /dataset: active_matter
+  - /model: conv_small
+  - /ft: linear
+  - _self_
+
+dataset:
+  num_frames: 16
+  target_offsets: [1]
+
+model:
+  objective: "jepa"
+  loss: "vicreg"
+  channel_wise_encoding: false
+  dims: [16, 32, 64, 128, 128]
+  num_res_blocks: [3, 3, 3, 9, 3]
+
+train:
+  num_epochs: 20
+  batch_size: 4
+  target_global_batch_size: 8
+  report_every: 100
+  save_every: 1
+  include_labels: false
+  sim_coeff: 2
+  std_coeff: 40
+  cov_coeff: 2
+  target_encoder_mode: "shared"
+  target_ema_momentum: 0.996
+  target_offset_weights: null
+  horizon_specific_predictors: false
+  predict_n_steps: false
+  lr_scheduler: "cosine"
+  lr_scheduler_warmup_epochs: 2
+  min_lr: 1e-6
+  lr: 4e-5
+  weight_decay: 0.05
+  noise_std: 0.0
+  distributed: true
+  run_name: "shared_masked_vicreg_r005_2"
+  context_masking:
+    enabled: true
+    mode: "spatiotemporal_block"
+    mask_ratio: 0.05
+    block_size: [2, 32, 32]
+    mask_value: "channel_mean"
+
+ft:
+  task: "regression"
+  use_attentive_pooling: true
+  lr_scheduler: "cosine"
+  lr_scheduler_warmup_epochs: 2
+  min_lr: 0
+  lr: 1e-3
+  weight_decay: 0.01
+  noise_std: 1.0
+  run_name: "activematter-jepa-FT-noise-std-1.0"
+  distributed: false
+
+out_path: "./checkpoints/shared_masked_vicreg_r005_2"
+cache_path: "./dataset_cache"

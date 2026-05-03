@@ -1,0 +1,54 @@
+defaults:
+  - /dataset: active_matter
+  - /model: conv_small
+  - /ft: linear
+  - _self_
+
+dataset:
+  num_frames: 16
+  target_offsets: [1, 2]
+
+model:
+  objective: "jepa"
+  loss: "vicreg"
+  channel_wise_encoding: false
+  dims: [16, 32, 64, 128, 128]
+  num_res_blocks: [3, 3, 3, 9, 3]
+
+train:
+  num_epochs: 20
+  batch_size: 4
+  report_every: 100
+  save_every: 1
+  include_labels: false
+  sim_coeff: 2
+  std_coeff: 40
+  cov_coeff: 2
+  target_encoder_mode: "ema"
+  target_ema_momentum: 0.996
+  target_offset_weights: [0.75, 0.25]
+  horizon_specific_predictors: true
+  predict_n_steps: false
+  lr_scheduler: "cosine"
+  lr_scheduler_warmup_epochs: 2
+  min_lr: 1e-6
+  lr: 5e-4
+  weight_decay: 0.05
+  noise_std: 1.0
+  distributed: true
+  run_name: "jepa-vicreg-multi-offset-weighted-multi-predictor"
+
+ft:
+  task: "regression"
+  use_attentive_pooling: true
+  lr_scheduler: "cosine"
+  lr_scheduler_warmup_epochs: 2
+  min_lr: 0
+  lr: 1e-3
+  weight_decay: 0.01
+  noise_std: 1.0
+  run_name: "activematter-jepa-FT-noise-std-1.0"
+  distributed: false
+
+out_path: "./checkpoints/jepa-vicreg-multi-offset-weighted-multi-predictor"
+cache_path: "./dataset_cache"
