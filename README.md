@@ -60,8 +60,8 @@ Use these overrides to turn each experiment component on or off.
 
 ```bash
 scripts/active_matter/run_train_jepa.sh \
-  +train.target_encoder_mode=ema \
-  +model.loss=vicreg \
+  train.target_encoder_mode=ema \
+  model.loss=vicreg \
   train.num_epochs=6 \
   train.lr=5e-4 \
   train.save_every=1 \
@@ -74,13 +74,13 @@ Add these overrides:
 
 ```bash
 dataset.target_offsets=[1,2] \
-+train.target_offset_weights=[0.75,0.25]
+train.target_offset_weights=[0.75,0.25]
 ```
 
 To use separate predictors for each horizon, also add:
 
 ```bash
-+train.horizon_specific_predictors=true
+train.horizon_specific_predictors=true
 ```
 
 ### Context Masking
@@ -102,7 +102,7 @@ Channel-wise encoding requires the first model dimension to be divisible by the 
 Example channel-wise encoder dimensions:
 
 ```bash
-+model.channel_wise_encoding=true \
+model.channel_wise_encoding=true \
 model.dims=[22,32,64,128,128]
 ```
 
@@ -112,7 +112,7 @@ To reproduce the channel-wise experiment design setup, use both the channel-wise
 
 ```bash
 scripts/active_matter/run_train_jepa.sh \
-  +model.channel_wise_encoding=true \
+  model.channel_wise_encoding=true \
   model.dims=[22,32,64,128,128] \
   train.num_epochs=6 \
   train.lr=5e-4 \
@@ -128,16 +128,16 @@ EMA target encoder, VicReg loss, multi-horizon targets, context masking, and cha
 
 ```bash
 scripts/active_matter/run_train_jepa.sh \
-  +train.target_encoder_mode=ema \
-  +model.loss=vicreg \
+  train.target_encoder_mode=ema \
+  model.loss=vicreg \
   dataset.target_offsets=[1,2] \
-  +train.target_offset_weights=[0.75,0.25] \
+  train.target_offset_weights=[0.75,0.25] \
   +train.context_masking.enabled=true \
   +train.context_masking.mode=spatiotemporal_block \
   +train.context_masking.mask_ratio=0.10 \
   +train.context_masking.block_size=[2,32,32] \
   +train.context_masking.mask_value=channel_mean \
-  +model.channel_wise_encoding=true \
+  model.channel_wise_encoding=true \
   model.dims=[22,32,64,128,128] \
   train.num_epochs=6 \
   train.lr=5e-4 \
