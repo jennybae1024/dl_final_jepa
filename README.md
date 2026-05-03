@@ -1,178 +1,83 @@
-# Active Matter JEPA Experiments
+# Predictive Representation Learning for Active Matter Systems
 
-This repository is used for Active Matter JEPA pretraining and representation evaluation.
+This repository contains the code and artifacts for our project, **A Systematic Study of Design Choices in Predictive Representation Learning for Active Matter Systems**.
+
+We study predictive representation learning for active matter systems using a joint-embedding framework. The project compares several design choices, including predictive objectives, EMA versus shared target encoders, multi-horizon prediction, spatiotemporal masking, and representation evaluation with linear and kNN regression probes.
 
 Reproducible experiment configurations and runnable training/evaluation scripts are detailed in [`EXPERIMENTS.md`](EXPERIMENTS.md).
 
-## Installation
+## Repository Structure
 
-Requirements:
-
-- Python 3.10+
-- PyTorch 2.0+ with CUDA
-- The Well dataset package and Active Matter data
-
-Install the project dependencies:
-
-```bash
-pip install torch torchvision einops omegaconf wandb tqdm h5py psutil scikit-learn timm the-well
-pip install -e .
+```text
+.
+├── configs/                  # Dataset, model, finetuning, and experiment configs
+│   └── experiments/          # Clean configs for submitted experiments
+├── physics_jepa/             # Main source code
+├── scripts/                  # Training and evaluation scripts
+│   └── active_matter/        # Active Matter experiment entry points
+├── EXPERIMENTS.md            # Detailed experiment configs and commands
+├── ENV.md                    # Environment and cache setup instructions
+├── requirements.txt          # Essential Python dependencies
+└── README.md                 # This file
 ```
 
-## Active Matter JEPA Pretraining
+Saved backbone weights, logs, and result tables should be submitted with the artifact bundle, or placed under paths such as `checkpoints/`, `logs/`, and `results/` if included locally.
 
-Use:
+## Environment Setup
 
-```bash
-scripts/active_matter/run_train_jepa.sh
-```
-
-The script runs:
+Install the essential Python dependencies:
 
 ```bash
-torchrun --nproc_per_node=2 --standalone \
-  -m physics_jepa.train_jepa \
-  configs/train_activematter_small.yaml
+pip install -r requirements.txt
 ```
 
-Config values can be changed from the command line with Hydra-style overrides:
+Before training or evaluation on the cluster, set the dataset/cache paths:
 
 ```bash
-scripts/active_matter/run_train_jepa.sh \
-  train.num_epochs=6 \
-  train.lr=5e-4 \
-  train.save_every=1 \
-  out_path=./checkpoints/jepa_six
+export HF_HOME=/scratch/$USER/huggingface
+export HF_DATASETS_CACHE=/scratch/$USER/huggingface
+export THE_WELL_DATA_DIR=/scratch/$USER/huggingface
 ```
 
-## Experiment Design Switches
+See [`ENV.md`](ENV.md) for the full environment setup notes.
 
-Use these overrides to turn each experiment component on or off.
+## Training
 
-| Component | Off / baseline | On / experimental |
-|---|---|---|
-| EMA target encoder | `+train.target_encoder_mode=shared` | `+train.target_encoder_mode=ema` |
-| VicReg loss | `+model.loss=mse` or `+model.loss=cosine` | `+model.loss=vicreg` |
-| Multi-horizon targets | `dataset.target_offsets=[1]` | `dataset.target_offsets=[1,2] +train.target_offset_weights=[0.75,0.25]` |
-| Horizon-specific predictors | `+train.horizon_specific_predictors=false` | `+train.horizon_specific_predictors=true` |
-| Context masking | omit `train.context_masking` overrides | use the masking overrides below |
-| Channel-wise encoding | `+model.channel_wise_encoding=false` | `+model.channel_wise_encoding=true model.dims=[22,32,64,128,128]` |
-
-### EMA Target Encoder + VicReg
+Run the submitted Active Matter representation learning experiments with:
 
 ```bash
-scripts/active_matter/run_train_jepa.sh \
-  train.target_encoder_mode=ema \
-  model.loss=vicreg \
-  train.num_epochs=6 \
-  train.lr=5e-4 \
-  train.save_every=1 \
-  out_path=./checkpoints/jepa_ema_vicreg
+scripts/active_matter/train_masked_vicreg.sh
+scripts/active_matter/train_multi_horizon_vicreg.sh
+scripts/active_matter/train_sg_ema_mse.sh
 ```
 
-### Multi-Horizon Prediction
-
-Add these overrides:
+Each script accepts `OUT_PATH` and `NPROC_PER_NODE` environment variables. For example:
 
 ```bash
-dataset.target_offsets=[1,2] \
-train.target_offset_weights=[0.75,0.25]
+OUT_PATH=./checkpoints/shared_masked_vicreg_r005_2 \
+NPROC_PER_NODE=2 \
+scripts/active_matter/train_masked_vicreg.sh
 ```
 
-To use separate predictors for each horizon, also add:
+## Evaluation
+
+Run frozen representation evaluation from a saved checkpoint or checkpoint directory:
 
 ```bash
-train.horizon_specific_predictors=true
+scripts/active_matter/eval_linear_probe.sh [checkpoint_file_or_dir]
+scripts/active_matter/eval_knn_regression.sh [checkpoint_file_or_dir]
 ```
 
-### Context Masking
+The linear probe config evaluates on the validation split. The kNN regression config evaluates on the test split, matching the submitted experiment commands.
 
-Add these overrides:
+## Experiment Details
 
-```bash
-+train.context_masking.enabled=true \
-+train.context_masking.mode=spatiotemporal_block \
-+train.context_masking.mask_ratio=0.10 \
-+train.context_masking.block_size=[2,32,32] \
-+train.context_masking.mask_value=channel_mean
-```
+The exact configs and scripts for each submitted experiment are listed in [`EXPERIMENTS.md`](EXPERIMENTS.md), including:
 
-### Channel-Wise Encoding
+- Spatiotemporal masking with VICReg
+- Multi-horizon VICReg
+- Stop-gradient EMA with MSE
+- Linear probe regression
+- kNN regression
 
-Channel-wise encoding requires the first model dimension to be divisible by the number of input channels. Active Matter uses 11 input channels, so the default `model.dims=[16,32,64,128,128]` does not work for channel-wise encoding because 16 is not divisible by 11.
-
-Example channel-wise encoder dimensions:
-
-```bash
-model.channel_wise_encoding=true \
-model.dims=[22,32,64,128,128]
-```
-
-With `model.dims=[22,32,64,128,128]`, the first encoder layer allocates 2 channels of embedding capacity per input channel because `22 / 11 = 2`. Channel-wise encoding changes the first encoder stem to grouped per-channel convolution and adds learned channel tokens. Keep it off when comparing against the original dense encoder.
-
-To reproduce the channel-wise experiment design setup, use both the channel-wise flag and the compatible dimensions:
-
-```bash
-scripts/active_matter/run_train_jepa.sh \
-  model.channel_wise_encoding=true \
-  model.dims=[22,32,64,128,128] \
-  train.num_epochs=6 \
-  train.lr=5e-4 \
-  train.save_every=1 \
-  out_path=./checkpoints/jepa_channel_six
-```
-
-To reproduce probing for channel-wise, add this argument to the scripts for both linear and knn
-
-## Full Example
-
-EMA target encoder, VicReg loss, multi-horizon targets, context masking, and channel-wise encoding:
-
-```bash
-scripts/active_matter/run_train_jepa.sh \
-  train.target_encoder_mode=ema \
-  model.loss=vicreg \
-  dataset.target_offsets=[1,2] \
-  train.target_offset_weights=[0.75,0.25] \
-  +train.context_masking.enabled=true \
-  +train.context_masking.mode=spatiotemporal_block \
-  +train.context_masking.mask_ratio=0.10 \
-  +train.context_masking.block_size=[2,32,32] \
-  +train.context_masking.mask_value=channel_mean \
-  model.channel_wise_encoding=true \
-  model.dims=[22,32,64,128,128] \
-  train.num_epochs=6 \
-  train.lr=5e-4 \
-  train.save_every=1 \
-  train.run_name=jepa-ema-vicreg-mh-mask-channelwise \
-  out_path=./checkpoints/jepa-ema-vicreg-mh-mask-channelwise
-```
-
-## Representation Evaluation
-
-Use a saved JEPA encoder checkpoint for frozen representation evaluation.
-
-Linear probe:
-
-```bash
-scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
-  ft.head_type=linear \
-  ft.use_attentive_pooling=false \
-  ft.task=regression
-```
-
-kNN regression:
-
-```bash
-scripts/active_matter/run_finetune_jepa.sh /path/to/checkpoint \
-  ft=knn \
-  ft.task=regression
-```
-
-To evaluate on the test split, add:
-
-```bash
-ft.eval_split=test
-```
-
-Metrics include overall MSE and per-target MSE for Active Matter labels such as `alpha` and `zeta`.
+Additional Hydra overrides can be appended to the scripts when needed.
