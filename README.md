@@ -6,6 +6,8 @@ We study predictive representation learning for active matter systems using a jo
 
 Reproducible experiment configurations and runnable training/evaluation scripts are detailed in [`EXPERIMENTS.md`](EXPERIMENTS.md).
 
+Model weights from our training and experiments can be found in this link: [Model Weights](https://drive.google.com/drive/folders/1QEaZ47_yjfuZsSUu6LmVWmaXDElv-zAz?usp=sharing)
+
 ## Repository Structure
 
 ```text
