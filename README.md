@@ -51,6 +51,7 @@ Run the submitted Active Matter representation learning experiments with:
 scripts/active_matter/train_masked_vicreg.sh
 scripts/active_matter/train_multi_horizon_vicreg.sh
 scripts/active_matter/train_sg_ema_mse.sh
+scripts/active_matter/run_train_jepa.sh
 ```
 
 Each script accepts `OUT_PATH` and `NPROC_PER_NODE` environment variables. For example:
