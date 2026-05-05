@@ -96,6 +96,8 @@ Config:
 configs/train_activematter_small.yaml
 ```
 
+Run:
+
 ```bash
 scripts/active_matter/run_train_jepa.sh
 ```
