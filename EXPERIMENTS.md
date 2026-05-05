@@ -106,7 +106,7 @@ Main settings:
 
 ```text
 model.dims: [22, 32, 64, 128, 128]
-model.channel_wise_encoding: false
+model.channel_wise_encoding: true
 ```
 
 
