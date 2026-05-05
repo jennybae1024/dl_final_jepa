@@ -88,6 +88,26 @@ train.lr: 5e-4
 train.batch_size: 8
 train.num_epochs: 20
 ```
+### Channel-wise Encoding
+
+Config:
+
+```text
+configs/train_activematter_small.yaml
+```
+
+```bash
+scripts/active_matter/run_train_jepa.sh
+```
+
+Main settings:
+
+```text
+model.dims: [22, 32, 64, 128, 128]
+model.channel_wise_encoding: false
+```
+
+
 
 ## Evaluation
 
