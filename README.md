@@ -80,6 +80,7 @@ The exact configs and scripts for each submitted experiment are listed in [`EXPE
 - Spatiotemporal masking with VICReg
 - Multi-horizon VICReg
 - Stop-gradient EMA with MSE
+- Channel-wise Encoding
 - Linear probe regression
 - kNN regression
 
